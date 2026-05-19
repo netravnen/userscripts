@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RIPE Meeting - Copy Session Filename
 // @namespace    https://github.com/netravnen/userscripts
-// @version      0.0.13
+// @version      0.0.14
 // @description  Floating panel + renamed PDF/PPT/PPTX/KEY/MP4 download on RIPE meeting session detail pages
 // @author       -
 // @match        https://*.ripe.net/programme/meeting-plan/sessions/*/*
@@ -115,6 +115,9 @@
    * @type {RegExp}
    */
   const SLIDES_EXT_RE = /\.(pdf|pptx?|key)$/i;
+  const TRUSTED_SLIDES_HOST = "pretalx.ripe.net";
+  const REQUEST_TIMEOUT_MS = 60_000;
+  const MAX_STEM_LENGTH = 220;
 
   /**
    * Convert arbitrary text into a safe filename token.
@@ -131,6 +134,15 @@
       .replace(/[^a-zA-Z0-9_]/g, "_")
       .replace(/_+/g, "_")
       .replace(/^_+|_+$/g, "");
+  }
+
+  /**
+   * Restrict the generated filename stem to a conservative filesystem-safe length.
+   * @param {string} value - Specifies the candidate filename stem.
+   * @returns {string} Returns a bounded filename stem.
+   */
+  function capStemLength(value) {
+    return value.slice(0, MAX_STEM_LENGTH).replace(/_+$/g, "");
   }
 
   /**
@@ -395,7 +407,8 @@
       affiliationToken = sanitize(speakers[0].affiliation);
   }
 
-  const stem = [
+  const stem = capStemLength(
+    [
     conference,
     sanitize(sessionTrack),
     extractDateToken(),
@@ -406,7 +419,8 @@
     affiliationToken,
   ]
     .filter(Boolean)
-    .join("_");
+    .join("_") || "RIPE_session",
+  );
 
   // ─────────────────────────────────────────────────────────────────────────
   // SLIDES LINKS - renamed download for PDF, PPT, PPTX, and KEY formats
@@ -460,12 +474,45 @@
        */
       function isPretalxPresentationLink(a) {
         try {
-          return SLIDES_EXT_RE.test(new URL(a.href).pathname);
+          const url = new URL(a.href);
+          return (
+            url.protocol === "https:" &&
+            url.hostname === TRUSTED_SLIDES_HOST &&
+            SLIDES_EXT_RE.test(url.pathname)
+          );
         } catch {
           return false;
         }
       },
     );
+  }
+
+  /**
+   * Parse and validate a slides URL against trusted host and protocol.
+   * @param {string} href - Specifies the candidate slides URL.
+   * @returns {URL|null} Returns a validated URL object or null when invalid.
+   */
+  function getTrustedSlidesUrl(href) {
+    try {
+      const url = new URL(href);
+      if (url.protocol !== "https:") return null;
+      if (url.hostname !== TRUSTED_SLIDES_HOST) return null;
+      return url;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Extract a supported slides file extension from a validated URL.
+   * @param {URL} url - Specifies the validated slides URL.
+   * @returns {string|null} Returns a supported extension or null when unsupported.
+   */
+  function getSlidesExtension(url) {
+    const m = url.pathname.match(/\.(\w+)$/);
+    if (!m) return null;
+    const ext = m[1].toLowerCase();
+    return Object.hasOwn(SLIDES_FORMAT, ext) ? ext : null;
   }
 
   /**
@@ -478,32 +525,35 @@
    * @returns {void} Returns nothing.
    */
   function applyRenamedDownload(anchor) {
-    let ext;
-    try {
-      const m = new URL(anchor.href).pathname.match(/\.(\w+)$/);
-      if (!m) return;
-      ext = m[1].toLowerCase();
-    } catch {
-      return;
-    }
+    if (anchor.dataset.ripeEnhanced === "1") return;
 
-    const format = SLIDES_FORMAT[ext] || {
-      icon: "file",
-      mime: "application/octet-stream",
-    };
+    const trustedUrl = getTrustedSlidesUrl(anchor.href);
+    if (!trustedUrl) return;
+
+    const ext = getSlidesExtension(trustedUrl);
+    if (!ext) return;
+
+    const format = SLIDES_FORMAT[ext];
     const filename = `${stem}.${ext}`;
 
     while (anchor.firstChild) anchor.removeChild(anchor.firstChild);
     anchor.appendChild(faIcon(format.icon));
     anchor.title = filename;
     Object.assign(anchor.style, ICON_ANCHOR_STYLE);
+    anchor.dataset.ripeEnhanced = "1";
 
     /**
      * Set the hover tooltip text on the slides icon.
      * @param {string} text - Specifies the tooltip text.
      * @returns {void} Returns nothing.
      */
+    let tooltipResetTimer = null;
+
     function setTooltip(text) {
+      if (tooltipResetTimer !== null) {
+        clearTimeout(tooltipResetTimer);
+        tooltipResetTimer = null;
+      }
       anchor.title = text;
     }
 
@@ -520,8 +570,9 @@
 
       GM_xmlhttpRequest({
         method: "GET",
-        url: anchor.href,
+        url: trustedUrl.href,
         responseType: "arraybuffer",
+        timeout: REQUEST_TIMEOUT_MS,
 
         /**
          * Update tooltip progress during download.
@@ -553,7 +604,50 @@
               setTooltip(filename);
             }
 
-            setTimeout(resetTooltipAfterHttpError, 4000);
+            tooltipResetTimer = setTimeout(resetTooltipAfterHttpError, 4000);
+            return;
+          }
+
+          if (!(res.response instanceof ArrayBuffer) || res.response.byteLength === 0) {
+            setTooltip("❌ Empty response - click to retry");
+
+            /**
+             * Restore default tooltip after an empty response.
+             * @returns {void} Returns nothing.
+             */
+            function resetTooltipAfterEmptyResponse() {
+              setTooltip(filename);
+            }
+
+            tooltipResetTimer = setTimeout(resetTooltipAfterEmptyResponse, 4000);
+            return;
+          }
+
+          const contentTypeMatch = res.responseHeaders?.match(
+            /^content-type:\s*([^\r\n;]+)/im,
+          );
+          const contentType = contentTypeMatch
+            ? contentTypeMatch[1].trim().toLowerCase()
+            : "";
+          const expectedMime = format.mime.toLowerCase();
+          const allowedGenericType = "application/octet-stream";
+
+          if (
+            contentType &&
+            contentType !== expectedMime &&
+            contentType !== allowedGenericType
+          ) {
+            setTooltip(`❌ Unexpected type (${contentType})`);
+
+            /**
+             * Restore default tooltip after MIME mismatch.
+             * @returns {void} Returns nothing.
+             */
+            function resetTooltipAfterMimeMismatch() {
+              setTooltip(filename);
+            }
+
+            tooltipResetTimer = setTimeout(resetTooltipAfterMimeMismatch, 4000);
             return;
           }
 
@@ -586,7 +680,7 @@
             setTooltip(filename);
           }
 
-          setTimeout(resetTooltipAfterSuccess, 2500);
+          tooltipResetTimer = setTimeout(resetTooltipAfterSuccess, 2500);
         },
 
         /**
@@ -605,7 +699,26 @@
             setTooltip(filename);
           }
 
-          setTimeout(resetTooltipAfterNetworkError, 4000);
+          tooltipResetTimer = setTimeout(resetTooltipAfterNetworkError, 4000);
+        },
+
+        /**
+         * Report request timeouts and restore tooltip state.
+         * @returns {void} Returns nothing.
+         */
+        ontimeout() {
+          delete anchor.dataset.fetching;
+          setTooltip("❌ Timed out - click to retry");
+
+          /**
+           * Restore default tooltip after timeout.
+           * @returns {void} Returns nothing.
+           */
+          function resetTooltipAfterTimeout() {
+            setTooltip(filename);
+          }
+
+          tooltipResetTimer = setTimeout(resetTooltipAfterTimeout, 4000);
         },
       });
     });
@@ -686,7 +799,7 @@
     position: "fixed",
     bottom: "24px",
     right: "24px",
-    zIndex: "2147483647",
+    zIndex: "999999",
     display: "flex",
     flexDirection: "column",
     gap: "8px",
