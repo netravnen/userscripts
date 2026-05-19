@@ -610,43 +610,20 @@
             : "";
           const expectedMime = format.mime.toLowerCase();
           const allowedGenericType = "application/octet-stream";
+          if (
+            contentType &&
+            contentType !== expectedMime &&
+            contentType !== allowedGenericType
+          ) {
+            setTooltip(`❌ Unexpected type (${contentType})`);
 
-          /**
-           * Resolve the recording section container by finding the heading element
-           * whose text content matches "Recording". Returns the heading's parent
-           * element or `null` when no recording section is present.
-           * @returns {HTMLElement|null} Returns the recording section element or null.
-           */
-          function findRecordingSection() {
-            for (const heading of mainEl.querySelectorAll("h2, h3, h4")) {
-              if (/^\s*recording\s*$/i.test(heading.textContent)) {
-                return heading.parentElement || null;
-              }
+            /**
+             * Restore default tooltip after MIME mismatch.
+             * @returns {void} Returns nothing.
+             */
+            function resetTooltipAfterMimeMismatch() {
+              setTooltip(filename);
             }
-            return null;
-          }
-
-          /**
-           * Resolve the MP4 recording URL from anchors or video sources on the page.
-           * Scope is narrowed to the recording section when one can be identified, to
-           * avoid matching unrelated `.mp4` links elsewhere in the content area.
-           * Both `a.href` and `video.src` / `source.src` return fully-resolved absolute
-           * URLs even when the underlying attribute value is a relative path.
-           * @returns {string|null} Returns a fully-resolved recording URL or null when
-           *   no recording is present on the page.
-           */
-          function findMp4Href() {
-            const scope = findRecordingSection() || mainEl;
-
-            const a = scope.querySelector('a[href$=".mp4"]');
-            if (a) return a.href;
-
-            return (
-              scope.querySelector('video[src$=".mp4"]')?.src ||
-              scope.querySelector('video source[src$=".mp4"]')?.src ||
-              null
-            );
-          }
 
             scheduleTooltipReset(resetTooltipAfterMimeMismatch, 4000);
             return;
