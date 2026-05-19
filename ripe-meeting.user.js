@@ -4,6 +4,8 @@
 // @version      0.0.14
 // @description  Floating panel + renamed PDF/PPT/PPTX/KEY/MP4 download on RIPE meeting session detail pages
 // @author       -
+// @icon         https://www.ripe.net/favicon.ico
+// @license      MIT
 // @match        https://*.ripe.net/programme/meeting-plan/sessions/*/*
 // @match        https://*.ripe.net/programme/meeting-plan/sessions/*/*/
 // @updateURL    https://github.com/netravnen/userscripts/raw/refs/heads/main/ripe-meeting.meta.js
