@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RIPE Meeting - Copy Session Filename
 // @namespace    https://github.com/netravnen/userscripts
-// @version      0.0.14
+// @version      0.2.0
 // @description  Floating panel + renamed PDF/PPT/PPTX/KEY/MP4 download on RIPE meeting session detail pages
 // @author       -
 // @icon         https://www.ripe.net/favicon.ico
