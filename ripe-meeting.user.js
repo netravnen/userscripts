@@ -31,7 +31,8 @@
 
   /**
    * Map from RIPE meeting number to the calendar year it took place.
-   * Used to reconstruct a full ISO date from the day/month on the session page.
+    * Used to reconstruct a full ISO date from the day/month shown on the session page.
+    * Meetings never span a year boundary, so a single year value is sufficient.
    * @type {Object.<number, number>}
    */
   const MEETING_YEAR = {
@@ -68,6 +69,7 @@
 
   /**
    * Map from lowercase English month name to its zero-padded two-digit number.
+    * Keys are always lowercase; callers must call `.toLowerCase()` before lookup.
    * @type {Object.<string, string>}
    */
   const MONTH_NUM = {
@@ -163,9 +165,10 @@
   }
 
   /**
-   * Shared inline style applied to every slides download anchor.
-   * Ensures identical box-model context so FA-converted SVG icons sit
-   * on the same baseline regardless of the site's own CSS.
+    * Shared inline style applied to every slides and recording download anchor.
+    * Ensures an identical box-model context so Font Awesome SVG icons share the
+    * same baseline regardless of site CSS applied to the original slides anchor.
+    * Must be spread via `Object.assign(element.style, ICON_ANCHOR_STYLE)`.
    * @type {Object.<string, string>}
    */
   const ICON_ANCHOR_STYLE = {
