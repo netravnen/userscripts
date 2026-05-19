@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         RIPE Meeting - Copy Session Filename
 // @namespace    https://github.com/netravnen/userscripts
-// @version      0.0.12
-// @description  Floating panel + renamed PDF/MP4 download on RIPE meeting session detail pages
+// @version      0.0.13
+// @description  Floating panel + renamed PDF/PPT/PPTX/KEY/MP4 download on RIPE meeting session detail pages
 // @author       -
 // @match        https://*.ripe.net/programme/meeting-plan/sessions/*/*
 // @match        https://*.ripe.net/programme/meeting-plan/sessions/*/*/
@@ -27,6 +27,11 @@
 
   if (!/^ripe\d+\.ripe\.net$/i.test(location.hostname)) return;
 
+  /**
+   * Map from RIPE meeting number to the calendar year it took place.
+   * Used to reconstruct a full ISO date from the day/month on the session page.
+   * @type {Object.<number, number>}
+   */
   const MEETING_YEAR = {
     72: 2016,
     73: 2016,
@@ -59,6 +64,10 @@
     100: 2030,
   };
 
+  /**
+   * Map from lowercase English month name to its zero-padded two-digit number.
+   * @type {Object.<string, string>}
+   */
   const MONTH_NUM = {
     january: "01",
     february: "02",
@@ -73,6 +82,39 @@
     november: "11",
     december: "12",
   };
+
+  /**
+   * @typedef {Object} SlideFormat
+   * @property {string} icon - The Font Awesome icon name (without `fa-` prefix).
+   * @property {string} mime - The MIME type used when constructing the download Blob.
+   */
+
+  /**
+   * Map from lowercase file extension to presentation format metadata.
+   * All slides files are served from pretalx.ripe.net (cross-origin) and
+   * therefore all require GM_xmlhttpRequest regardless of format.
+   * The `.key` format has no dedicated Font Awesome Free icon and falls back
+   * to the generic `fa-file` icon.
+   * @type {Object.<string, SlideFormat>}
+   */
+  const SLIDES_FORMAT = {
+    pdf: { icon: "file-pdf", mime: "application/pdf" },
+    ppt: {
+      icon: "file-powerpoint",
+      mime: "application/vnd.ms-powerpoint",
+    },
+    pptx: {
+      icon: "file-powerpoint",
+      mime: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    },
+    key: { icon: "file", mime: "application/octet-stream" },
+  };
+
+  /**
+   * Regular expression matching all handled presentation file extensions.
+   * @type {RegExp}
+   */
+  const SLIDES_EXT_RE = /\.(pdf|pptx?|key)$/i;
 
   /**
    * Convert arbitrary text into a safe filename token.
@@ -92,9 +134,11 @@
   }
 
   /**
-   * Create a Font Awesome icon element.
+   * Create a Font Awesome regular-style icon element.
+   * The element is converted to an inline SVG by the FA MutationObserver
+   * loaded via `@require`.
    * @param {string} name - Specifies the icon name without the `fa-` prefix.
-   * @returns {HTMLElement} Returns an icon element.
+   * @returns {HTMLElement} Returns a configured icon element.
    */
   function faIcon(name) {
     const i = document.createElement("i");
@@ -104,10 +148,12 @@
     return i;
   }
 
-  // ── Shared icon anchor style ───────────────────────────────────────────────
-  // Applied identically to both the PDF anchor and the injected MP4 anchor
-  // so FA's converted SVG elements share the same box-model context and
-  // sit on the same baseline regardless of the site's own CSS on the PDF link.
+  /**
+   * Shared inline style applied to every slides download anchor.
+   * Ensures identical box-model context so FA-converted SVG icons sit
+   * on the same baseline regardless of the site's own CSS.
+   * @type {Object.<string, string>}
+   */
   const ICON_ANCHOR_STYLE = {
     display: "inline-flex",
     alignItems: "center",
@@ -150,6 +196,10 @@
   const mainEl =
     document.querySelector('main, [id="content"], article') || document.body;
 
+  /**
+   * Regular expression matching a day and full month name within page text.
+   * @type {RegExp}
+   */
   const DATE_RE =
     /\b(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\b/i;
 
@@ -157,8 +207,8 @@
    * Build a date token in YYYYMMDD format.
    * @param {number} year - Specifies the meeting year.
    * @param {string} day - Specifies the day value from page text.
-   * @param {string} monthName - Specifies the full month name.
-   * @returns {string} Returns a date token.
+   * @param {string} monthName - Specifies the full English month name.
+   * @returns {string} Returns a compact ISO date token.
    */
   function buildDateToken(year, day, monthName) {
     const mm = MONTH_NUM[monthName.toLowerCase()];
@@ -167,12 +217,14 @@
   }
 
   /**
-   * Extract the session date from the page and convert it to a token.
+   * Extract the session date from page metadata and convert it to a token.
+   * Falls back to a full-page text search when the structured `<dt>` is absent.
    * @returns {string|null} Returns a tokenized date or null when not available.
    */
   function extractDateToken() {
     const year = MEETING_YEAR[meetingNum];
     if (!year) return null;
+
     for (const dt of mainEl.querySelectorAll("dt")) {
       if (/^\s*date:\s*$/i.test(dt.textContent)) {
         const dd = dt.nextElementSibling;
@@ -182,10 +234,15 @@
         }
       }
     }
+
     const m = mainEl.innerText.match(DATE_RE);
     return m ? buildDateToken(year, m[1], m[2]) : null;
   }
 
+  /**
+   * Regular expression matching a time-of-day string with UTC offset.
+   * @type {RegExp}
+   */
   const TIME_RE = /(\d{1,2}):(\d{2})\s*\(UTC\s*([+-])(\d{2})(\d{2})\)/;
 
   /**
@@ -206,7 +263,8 @@
   }
 
   /**
-   * Extract and normalize the session time from page metadata.
+   * Extract and normalize the session start time from page metadata.
+   * Falls back to a full-page text search when the structured `<dt>` is absent.
    * @returns {string|null} Returns a tokenized time or null when not available.
    */
   function extractTimeToken() {
@@ -219,12 +277,14 @@
         }
       }
     }
+
     const m = mainEl.innerText.match(TIME_RE);
     return m ? formatTimeToken(m) : null;
   }
 
   /**
-   * Locate the DOM container that contains speaker names.
+   * Locate the DOM container that holds speaker name anchors.
+   * Handles both `<dl>/<dt>/<dd>` and inline `<p>` page layouts.
    * @returns {HTMLElement|null} Returns a speaker container or null when not found.
    */
   function findSpeakerContainer() {
@@ -234,6 +294,7 @@
         if (dd && dd.tagName === "DD") return dd;
       }
     }
+
     for (const el of mainEl.querySelectorAll("p, div")) {
       const labelInStrong = el.querySelector("strong, b");
       const hasLabel =
@@ -242,7 +303,7 @@
           /**
            * Check whether a child node contains a speaker label text fragment.
            * @param {Node} n - Specifies the child node from the candidate container.
-           * @returns {boolean} Returns true when the node is speaker label text.
+           * @returns {boolean} Returns true when the node is a speaker label text node.
            */
           function childHasSpeakerText(n) {
             return (
@@ -250,7 +311,9 @@
             );
           },
         );
+
       if (!hasLabel) continue;
+
       const speakerLinks = [...el.querySelectorAll("a[href]")].filter(
         /**
          * Keep only speaker anchors that point to same-page hash targets.
@@ -266,8 +329,10 @@
           }
         },
       );
+
       if (speakerLinks.length > 0) return el;
     }
+
     return null;
   }
 
@@ -281,7 +346,7 @@
       /**
        * Keep only speaker links that point back to this page with a hash.
        * @param {HTMLAnchorElement} a - Specifies the candidate anchor.
-       * @returns {boolean} Returns true when the anchor is a speaker link.
+       * @returns {boolean} Returns true when the anchor is a same-page speaker link.
        */
       function isSpeakerAnchor(a) {
         try {
@@ -292,9 +357,10 @@
         }
       },
     );
+
     return anchors.map(
       /**
-       * Extract normalized speaker details from an anchor and adjacent text.
+       * Extract normalized speaker details from an anchor and its adjacent text.
        * @param {HTMLAnchorElement} a - Specifies the speaker anchor.
        * @returns {{name: string, affiliation: string}} Returns parsed speaker details.
        */
@@ -302,11 +368,13 @@
         const name = a.textContent.trim();
         let raw = "",
           node = a.nextSibling;
+
         while (node) {
           if (node.nodeType === Node.TEXT_NODE) raw += node.textContent;
           else break;
           node = node.nextSibling;
         }
+
         return {
           name,
           affiliation: raw.replace(/^[\s,]+/, "").replace(/[\s,]+$/, ""),
@@ -319,6 +387,7 @@
   const speakers = speakerContainer ? parseSpeakers(speakerContainer) : [];
   let speakerToken = "",
     affiliationToken = "";
+
   if (speakers.length > 0) {
     speakerToken = sanitize(speakers[0].name);
     if (speakers.length > 1) speakerToken += "_et_al";
@@ -340,45 +409,93 @@
     .join("_");
 
   // ─────────────────────────────────────────────────────────────────────────
-  // SLIDES LINK - FA file-pdf icon, renamed download
+  // SLIDES LINKS - renamed download for PDF, PPT, PPTX, and KEY formats
   // ─────────────────────────────────────────────────────────────────────────
+
   /**
-   * Find the primary slides download anchor on the session page.
-   * @returns {HTMLAnchorElement|null} Returns a slides anchor element or null.
+   * Find all presentation slides download anchors on the session page.
+   * Covers PDF, PPT, PPTX, and KEY formats across both known HTML layouts.
+   * Three strategies are tried in priority order:
+   *   1. `title="Download slides as *"` attributes (matches all formats).
+   *   2. `<dt>Slides:</dt>` sibling `<dd>` containing known-extension anchors.
+   *   3. All `pretalx.ripe.net` anchors with a known presentation extension.
+   * @returns {HTMLAnchorElement[]} Returns an array of slides anchor elements, possibly empty.
    */
-  function findSlidesAnchor() {
-    const byTitle = mainEl.querySelector(
-      'a[title*="Download slides"], a[title*="download slides"]',
-    );
-    if (byTitle) return byTitle;
+  function findAllSlidesAnchors() {
+    const byTitle = [
+      ...mainEl.querySelectorAll(
+        'a[title*="Download slides"], a[title*="download slides"]',
+      ),
+    ];
+    if (byTitle.length > 0) return byTitle;
+
     for (const dt of mainEl.querySelectorAll("dt")) {
       if (/^\s*slides:\s*$/i.test(dt.textContent)) {
         const dd = dt.nextElementSibling;
         if (dd) {
-          const a = dd.querySelector('a[href$=".pdf"]');
-          if (a) return a;
+          const anchors = [...dd.querySelectorAll("a[href]")].filter(
+            /**
+             * Keep only anchors pointing to known presentation file extensions.
+             * @param {HTMLAnchorElement} a - Specifies the candidate anchor.
+             * @returns {boolean} Returns true when the href ends with a known presentation extension.
+             */
+            function isKnownPresentationLink(a) {
+              try {
+                return SLIDES_EXT_RE.test(new URL(a.href).pathname);
+              } catch {
+                return false;
+              }
+            },
+          );
+          if (anchors.length > 0) return anchors;
         }
       }
     }
-    return (
-      mainEl.querySelector('a[href*="pretalx.ripe.net"][href$=".pdf"]') || null
+
+    return [...mainEl.querySelectorAll('a[href*="pretalx.ripe.net"]')].filter(
+      /**
+       * Keep only pretalx anchors with a known presentation file extension.
+       * @param {HTMLAnchorElement} a - Specifies the candidate anchor.
+       * @returns {boolean} Returns true when the anchor points to a known presentation type.
+       */
+      function isPretalxPresentationLink(a) {
+        try {
+          return SLIDES_EXT_RE.test(new URL(a.href).pathname);
+        } catch {
+          return false;
+        }
+      },
     );
   }
 
   /**
-   * Convert the slides anchor to a renamed PDF downloader with progress feedback.
+   * Convert a slides anchor to a renamed downloader with progress feedback.
+   * File extension and MIME type are resolved automatically from the anchor href
+   * via `SLIDES_FORMAT`. Unknown extensions fall back to a generic file icon.
+   * All slides assets are hosted on pretalx.ripe.net (cross-origin) and
+   * therefore always retrieved via `GM_xmlhttpRequest`.
    * @param {HTMLAnchorElement} anchor - Specifies the slides anchor to enhance.
    * @returns {void} Returns nothing.
    */
   function applyRenamedDownload(anchor) {
-    const pdfFilename = `${stem}.pdf`;
+    let ext;
+    try {
+      const m = new URL(anchor.href).pathname.match(/\.(\w+)$/);
+      if (!m) return;
+      ext = m[1].toLowerCase();
+    } catch {
+      return;
+    }
+
+    const format = SLIDES_FORMAT[ext] || {
+      icon: "file",
+      mime: "application/octet-stream",
+    };
+    const filename = `${stem}.${ext}`;
 
     while (anchor.firstChild) anchor.removeChild(anchor.firstChild);
-    anchor.appendChild(faIcon("file-pdf"));
-    anchor.title = pdfFilename;
-
-    // Apply shared icon anchor style - overrides any site CSS that would
-    // otherwise cause vertical misalignment between the two icons
+    anchor.appendChild(faIcon(format.icon));
+    anchor.title = filename;
     Object.assign(anchor.style, ICON_ANCHOR_STYLE);
 
     /**
@@ -391,7 +508,7 @@
     }
 
     /**
-     * Download the PDF through GM_xmlhttpRequest to enforce a custom filename.
+     * Download the file through GM_xmlhttpRequest to enforce a custom filename.
      * @param {MouseEvent} e - Specifies the click event.
      * @returns {void} Returns nothing.
      */
@@ -418,31 +535,33 @@
         },
 
         /**
-         * Complete PDF download and restore tooltip state.
+         * Complete file download and restore tooltip state.
          * @param {{status: number, response: ArrayBuffer}} res - Specifies the response payload.
          * @returns {void} Returns nothing.
          */
         onload(res) {
           delete anchor.dataset.fetching;
+
           if (res.status < 200 || res.status >= 400) {
             setTooltip(`❌ HTTP ${res.status} - click to retry`);
 
             /**
-             * Restore default PDF tooltip after a failed HTTP response.
+             * Restore default tooltip after a failed HTTP response.
              * @returns {void} Returns nothing.
              */
             function resetTooltipAfterHttpError() {
-              setTooltip(pdfFilename);
+              setTooltip(filename);
             }
 
             setTimeout(resetTooltipAfterHttpError, 4000);
             return;
           }
-          const blob = new Blob([res.response], { type: "application/pdf" });
+
+          const blob = new Blob([res.response], { type: format.mime });
           const blobUrl = URL.createObjectURL(blob);
           const dl = document.createElement("a");
           dl.href = blobUrl;
-          dl.download = pdfFilename;
+          dl.download = filename;
           dl.style.display = "none";
           document.body.appendChild(dl);
           dl.click();
@@ -457,14 +576,14 @@
           }
 
           setTimeout(revokeBlobUrl, 10_000);
-          setTooltip(`✓ Downloaded as ${pdfFilename}`);
+          setTooltip(`✓ Downloaded as ${filename}`);
 
           /**
            * Restore the default tooltip after success feedback.
            * @returns {void} Returns nothing.
            */
           function resetTooltipAfterSuccess() {
-            setTooltip(pdfFilename);
+            setTooltip(filename);
           }
 
           setTimeout(resetTooltipAfterSuccess, 2500);
@@ -483,7 +602,7 @@
            * @returns {void} Returns nothing.
            */
           function resetTooltipAfterNetworkError() {
-            setTooltip(pdfFilename);
+            setTooltip(filename);
           }
 
           setTimeout(resetTooltipAfterNetworkError, 4000);
@@ -493,8 +612,9 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // RECORDING LINK - FA file-video icon, adjacent to PDF icon
+  // RECORDING LINK - FA file-video icon, injected after the last slides anchor
   // ─────────────────────────────────────────────────────────────────────────
+
   /**
    * Resolve the MP4 recording URL from links or video sources on the page.
    * @returns {string|null} Returns a recording URL or null when not present.
@@ -502,6 +622,7 @@
   function findMp4Href() {
     const a = mainEl.querySelector('a[href$=".mp4"]');
     if (a) return a.href;
+
     return (
       mainEl.querySelector('video[src$=".mp4"]')?.src ||
       mainEl.querySelector('video source[src$=".mp4"]')?.src ||
@@ -510,8 +631,10 @@
   }
 
   /**
-   * Inject an MP4 download icon directly after the PDF icon.
-   * @param {HTMLAnchorElement} adjacentAnchor - Specifies the anchor after which to insert.
+   * Inject an MP4 download icon directly after the last slides anchor.
+   * The recording asset is same-origin so the native `download` attribute
+   * rename is used; no `GM_xmlhttpRequest` is required.
+   * @param {HTMLAnchorElement} adjacentAnchor - Specifies the last slides anchor after which to insert.
    * @returns {void} Returns nothing.
    */
   function injectMp4Link(adjacentAnchor) {
@@ -527,23 +650,33 @@
     link.id = "ripe-mp4-download";
     link.appendChild(faIcon("file-video"));
 
-    // Same shared style as the PDF anchor - guarantees identical box model
-    // so both SVG icons share the same baseline and cap-height
     Object.assign(link.style, ICON_ANCHOR_STYLE);
-    link.style.marginLeft = "6px"; // gap between the two icons
+    link.style.marginLeft = "6px";
 
     adjacentAnchor.insertAdjacentElement("afterend", link);
   }
 
-  const slidesAnchor = findSlidesAnchor();
-  if (slidesAnchor) {
-    applyRenamedDownload(slidesAnchor);
-    injectMp4Link(slidesAnchor);
+  const slidesAnchors = findAllSlidesAnchors();
+
+  slidesAnchors.forEach(
+    /**
+     * Apply renamed download handling to each discovered slides anchor.
+     * @param {HTMLAnchorElement} anchor - Specifies the slides anchor to process.
+     * @returns {void} Returns nothing.
+     */
+    function processSlideAnchor(anchor) {
+      applyRenamedDownload(anchor);
+    },
+  );
+
+  if (slidesAnchors.length > 0) {
+    injectMp4Link(slidesAnchors[slidesAnchors.length - 1]);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
   // FLOATING PANEL
   // ─────────────────────────────────────────────────────────────────────────
+
   const PANEL_ID = "ripe-session-copy-panel";
   if (document.getElementById(PANEL_ID)) return;
 
@@ -562,7 +695,7 @@
 
   /**
    * Create a floating-panel clipboard button for a filename extension.
-   * @param {string} ext - Specifies the file extension (`pdf` or `mp4`).
+   * @param {string} ext - Specifies the file extension label shown on the button.
    * @returns {HTMLButtonElement} Returns a configured button element.
    */
   function makeButton(ext) {
@@ -575,7 +708,7 @@
 
     const icon = faIcon("clipboard");
     const label = document.createElement("span");
-    label.textContent = `  Copy .${ext} filename`;
+    label.textContent = ` Copy .${ext} filename`;
     label.style.pointerEvents = "none";
 
     btn.appendChild(icon);
@@ -602,7 +735,7 @@
     });
 
     /**
-     * Apply hover styling while the button is active.
+     * Apply hover styling while the cursor is over the button.
      * @returns {void} Returns nothing.
      */
     function handleMouseEnter() {
@@ -621,24 +754,25 @@
     btn.addEventListener("mouseleave", handleMouseLeave);
 
     /**
-     * Copy the computed filename and temporarily show success styling.
+     * Copy the computed filename to the clipboard and show success styling.
      * @returns {void} Returns nothing.
      */
     function handleButtonClick() {
       if (btn.dataset.copied) return;
+
       GM_setClipboard(`${stem}.${ext}`, "text");
       btn.dataset.copied = "1";
-      label.textContent = "  Copied!";
+      label.textContent = " Copied!";
       btn.style.background = BG_SUCCESS;
       btn.style.cursor = "default";
 
       /**
-       * Restore button text and style after success feedback timeout.
+       * Restore button text and style after the success feedback timeout.
        * @returns {void} Returns nothing.
        */
       function resetButtonState() {
         delete btn.dataset.copied;
-        label.textContent = `  Copy .${ext} filename`;
+        label.textContent = ` Copy .${ext} filename`;
         btn.style.background = BG_BASE;
         btn.style.cursor = "pointer";
       }
