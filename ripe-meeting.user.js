@@ -203,8 +203,11 @@
   };
 
   const confMatch = location.hostname.match(/^ripe(\d+)\.ripe\.net$/i);
-  const meetingNum = parseInt(confMatch[1], 10);
-  const conference = "RIPE" + confMatch[1].toUpperCase();
+  if (!confMatch) return;
+
+  const meetingId = confMatch[1];
+  const meetingNum = parseInt(meetingId, 10);
+  const conference = "RIPE" + meetingId.toUpperCase();
 
   /**
    * Determine whether an anchor points at the parent track session path.
@@ -215,22 +218,7 @@
     return /\/programme\/meeting-plan\/sessions\/\d+\/?$/.test(a.pathname);
   }
 
-  const trackAnchor = [...document.querySelectorAll("a[href]")].find(
-    isTrackAnchor,
-  );
-  const sessionTrack = trackAnchor ? trackAnchor.textContent.trim() : "Session";
-
-  const pathMatch = location.pathname.match(
-    /\/sessions\/\d+\/([A-Z0-9]+)\/?$/i,
-  );
-  if (!pathMatch) return;
-  const sessionId = pathMatch[1].toUpperCase();
-
-  const h1 = document.querySelector("h1");
-  if (!h1) return;
-  const sessionTitle = h1.textContent.trim();
-
-  const mainEl =
+  let mainEl =
     document.querySelector('main, [id="content"], article') || document.body;
 
   /**
@@ -396,32 +384,12 @@
     );
   }
 
-  const speakerContainer = findSpeakerContainer();
-  const speakers = speakerContainer ? parseSpeakers(speakerContainer) : [];
-  let speakerToken = "",
-    affiliationToken = "";
-
-  if (speakers.length > 0) {
-    speakerToken = sanitize(speakers[0].name);
-    if (speakers.length > 1) speakerToken += "_et_al";
-    if (speakers[0].affiliation)
-      affiliationToken = sanitize(speakers[0].affiliation);
-  }
-
-  const stem = capStemLength(
-    [
-    conference,
-    sanitize(sessionTrack),
-    extractDateToken(),
-    extractTimeToken(),
-    sessionId,
-    sanitize(sessionTitle),
-    speakerToken,
-    affiliationToken,
-  ]
-    .filter(Boolean)
-    .join("_") || "RIPE_session",
-  );
+  /** @type {number} */
+  const MAX_INIT_RETRIES = 10;
+  /** @type {number} */
+  let initRetryCount = 0;
+  /** @type {string} */
+  let stem = "RIPE_session";
 
   // ─────────────────────────────────────────────────────────────────────────
   // SLIDES LINKS - renamed download for PDF, PPT, PPTX, and KEY formats
@@ -536,12 +504,13 @@
     while (anchor.firstChild) anchor.removeChild(anchor.firstChild);
     anchor.appendChild(faIcon(format.icon));
     anchor.title = filename;
+    anchor.setAttribute("aria-label", `Download slides: ${filename}`);
     Object.assign(anchor.style, ICON_ANCHOR_STYLE);
     anchor.dataset.ripeEnhanced = "1";
 
     /**
-    * Set the hover tooltip text on the slides icon anchor.
-     * @param {string} text - Specifies the tooltip text.
+     * Set the hover tooltip and accessible label on the slides icon anchor.
+     * @param {string} text - Specifies the tooltip and aria-label text.
      * @returns {void} Returns nothing.
      */
     /** @type {number|null} */
@@ -549,6 +518,7 @@
 
     function setTooltip(text) {
       anchor.title = text;
+      anchor.setAttribute("aria-label", text);
     }
 
     /**
@@ -571,6 +541,8 @@
       e.preventDefault();
       if (anchor.dataset.fetching) return;
       anchor.dataset.fetching = "1";
+      anchor.style.cursor = "wait";
+      anchor.style.opacity = "0.5";
       setTooltip("⏳ Fetching…");
 
       GM_xmlhttpRequest({
@@ -597,6 +569,8 @@
          */
         onload(res) {
           delete anchor.dataset.fetching;
+          anchor.style.cursor = "pointer";
+          anchor.style.opacity = "1";
 
           if (res.status < 200 || res.status >= 400) {
             setTooltip(`❌ HTTP ${res.status} - click to retry`);
@@ -637,20 +611,42 @@
           const expectedMime = format.mime.toLowerCase();
           const allowedGenericType = "application/octet-stream";
 
-          if (
-            contentType &&
-            contentType !== expectedMime &&
-            contentType !== allowedGenericType
-          ) {
-            setTooltip(`❌ Unexpected type (${contentType})`);
-
-            /**
-             * Restore default tooltip after MIME mismatch.
-             * @returns {void} Returns nothing.
-             */
-            function resetTooltipAfterMimeMismatch() {
-              setTooltip(filename);
+          /**
+           * Resolve the recording section container by finding the heading element
+           * whose text content matches "Recording". Returns the heading's parent
+           * element or `null` when no recording section is present.
+           * @returns {HTMLElement|null} Returns the recording section element or null.
+           */
+          function findRecordingSection() {
+            for (const heading of mainEl.querySelectorAll("h2, h3, h4")) {
+              if (/^\s*recording\s*$/i.test(heading.textContent)) {
+                return heading.parentElement || null;
+              }
             }
+            return null;
+          }
+
+          /**
+           * Resolve the MP4 recording URL from anchors or video sources on the page.
+           * Scope is narrowed to the recording section when one can be identified, to
+           * avoid matching unrelated `.mp4` links elsewhere in the content area.
+           * Both `a.href` and `video.src` / `source.src` return fully-resolved absolute
+           * URLs even when the underlying attribute value is a relative path.
+           * @returns {string|null} Returns a fully-resolved recording URL or null when
+           *   no recording is present on the page.
+           */
+          function findMp4Href() {
+            const scope = findRecordingSection() || mainEl;
+
+            const a = scope.querySelector('a[href$=".mp4"]');
+            if (a) return a.href;
+
+            return (
+              scope.querySelector('video[src$=".mp4"]')?.src ||
+              scope.querySelector('video source[src$=".mp4"]')?.src ||
+              null
+            );
+          }
 
             scheduleTooltipReset(resetTooltipAfterMimeMismatch, 4000);
             return;
@@ -694,6 +690,8 @@
          */
         onerror() {
           delete anchor.dataset.fetching;
+          anchor.style.cursor = "pointer";
+          anchor.style.opacity = "1";
           setTooltip("❌ Network error - click to retry");
 
           /**
@@ -713,6 +711,8 @@
          */
         ontimeout() {
           delete anchor.dataset.fetching;
+          anchor.style.cursor = "pointer";
+          anchor.style.opacity = "1";
           setTooltip("❌ Timed out - click to retry");
 
           /**
@@ -734,16 +734,38 @@
   // ─────────────────────────────────────────────────────────────────────────
 
   /**
-   * Resolve the MP4 recording URL from links or video sources on the page.
-   * @returns {string|null} Returns a recording URL or null when not present.
+   * Resolve the recording section container by finding the heading element
+   * whose text content matches "Recording". Returns the heading's parent
+   * element or `null` when no recording section is present.
+   * @returns {HTMLElement|null} Returns the recording section element or null.
+   */
+  function findRecordingSection() {
+    for (const heading of mainEl.querySelectorAll("h2, h3, h4")) {
+      if (/^\s*recording\s*$/i.test(heading.textContent)) {
+        return heading.parentElement || null;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Resolve the MP4 recording URL from anchors or video sources on the page.
+   * Scope is narrowed to the recording section when one can be identified, to
+   * avoid matching unrelated `.mp4` links elsewhere in the content area.
+   * Both `a.href` and `video.src` / `source.src` return fully-resolved absolute
+   * URLs even when the underlying attribute value is a relative path.
+   * @returns {string|null} Returns a fully-resolved recording URL or null when
+   *   no recording is present on the page.
    */
   function findMp4Href() {
-    const a = mainEl.querySelector('a[href$=".mp4"]');
+    const scope = findRecordingSection() || mainEl;
+
+    const a = scope.querySelector('a[href$=".mp4"]');
     if (a) return a.href;
 
     return (
-      mainEl.querySelector('video[src$=".mp4"]')?.src ||
-      mainEl.querySelector('video source[src$=".mp4"]')?.src ||
+      scope.querySelector('video[src$=".mp4"]')?.src ||
+      scope.querySelector('video source[src$=".mp4"]')?.src ||
       null
     );
   }
@@ -767,58 +789,50 @@
     link.href = mp4Href;
     link.download = mp4Filename;
     link.title = mp4Filename;
+    link.setAttribute("aria-label", `Download recording: ${mp4Filename}`);
     link.id = "ripe-mp4-download";
     link.appendChild(faIcon("file-video"));
 
     Object.assign(link.style, ICON_ANCHOR_STYLE);
     link.style.marginLeft = "6px";
 
+    /**
+     * Provide brief visual confirmation when the MP4 download is triggered.
+     * Does not prevent the native browser download.
+     * @returns {void} Returns nothing.
+     */
+    function handleMp4Click() {
+      while (link.firstChild) link.removeChild(link.firstChild);
+      link.appendChild(faIcon("circle-check"));
+      link.setAttribute("aria-label", `Download started: ${mp4Filename}`);
+
+      /**
+       * Restore the original file-video icon after success feedback.
+       * @returns {void} Returns nothing.
+       */
+      function restoreMp4Icon() {
+        while (link.firstChild) link.removeChild(link.firstChild);
+        link.appendChild(faIcon("file-video"));
+        link.setAttribute("aria-label", `Download recording: ${mp4Filename}`);
+      }
+
+      setTimeout(restoreMp4Icon, 2000);
+    }
+
+    link.addEventListener("click", handleMp4Click);
+
     adjacentAnchor.insertAdjacentElement("afterend", link);
   }
 
-  const slidesAnchors = findAllSlidesAnchors();
-
-  slidesAnchors.forEach(
-    /**
-     * Apply renamed download handling to each discovered slides anchor.
-     * @param {HTMLAnchorElement} anchor - Specifies the slides anchor to process.
-     * @returns {void} Returns nothing.
-     */
-    function processSlideAnchor(anchor) {
-      applyRenamedDownload(anchor);
-    },
-  );
-
-  if (slidesAnchors.length > 0) {
-    injectMp4Link(slidesAnchors[slidesAnchors.length - 1]);
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // FLOATING PANEL
-  // ─────────────────────────────────────────────────────────────────────────
-
   const PANEL_ID = "ripe-session-copy-panel";
-  if (document.getElementById(PANEL_ID)) return;
-
-  const panel = document.createElement("div");
-  panel.id = PANEL_ID;
-  Object.assign(panel.style, {
-    position: "fixed",
-    bottom: "24px",
-    right: "24px",
-    zIndex: "999999",
-    display: "flex",
-    flexDirection: "column",
-    gap: "8px",
-    fontFamily: '-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif',
-  });
-
   /**
    * Create a floating-panel clipboard button for a filename extension.
    * @param {string} ext - Specifies the file extension label shown on the button.
+   * @param {HTMLSpanElement} liveRegion - Specifies the shared aria-live region
+   *   element used to announce copy events to screen readers.
    * @returns {HTMLButtonElement} Returns a configured button element.
    */
-  function makeButton(ext) {
+  function makeButton(ext, liveRegion) {
     const BG_BASE = "#003d82";
     const BG_HOVER = "#0057b8";
     const BG_SUCCESS = "#1f8a4c";
@@ -827,6 +841,7 @@
 
     const btn = document.createElement("button");
     btn.title = `${stem}.${ext}`;
+    btn.setAttribute("aria-label", `Copy ${stem}.${ext} filename to clipboard`);
 
     const icon = faIcon("clipboard");
     const label = document.createElement("span");
@@ -857,7 +872,8 @@
     });
 
     /**
-     * Apply hover styling while the cursor is over the button.
+     * Apply hover styling while the cursor is over the button, unless the
+     * copied-success state is currently active.
      * @returns {void} Returns nothing.
      */
     function handleMouseEnter() {
@@ -886,6 +902,8 @@
       GM_setClipboard(`${stem}.${ext}`, "text");
       btn.dataset.copied = "1";
       label.textContent = " Copied!";
+      liveRegion.textContent = `Copied: ${stem}.${ext}`;
+      btn.setAttribute("aria-label", "Filename copied to clipboard");
       btn.style.background = BG_SUCCESS;
       btn.style.cursor = "default";
 
@@ -896,6 +914,8 @@
       function resetButtonState() {
         delete btn.dataset.copied;
         label.textContent = ` Copy .${ext} filename`;
+        liveRegion.textContent = "";
+        btn.setAttribute("aria-label", `Copy ${stem}.${ext} filename to clipboard`);
         btn.style.background = BG_BASE;
         btn.style.cursor = "pointer";
       }
@@ -909,7 +929,163 @@
     return btn;
   }
 
-  panel.appendChild(makeButton("pdf"));
-  panel.appendChild(makeButton("mp4"));
-  document.body.appendChild(panel);
+  /**
+   * Execute all page mutations: slides interception, MP4 injection, and panel.
+   * Returns true when all required fields were resolved and mutations applied;
+   * returns false when one or more required fields were missing.
+   * @returns {boolean} Returns true when initialization completed successfully.
+   */
+  function initScript() {
+    const h1 = document.querySelector("h1");
+    if (!h1) return false;
+
+    const currentPathMatch = location.pathname.match(
+      /\/sessions\/\d+\/([A-Z0-9]+)\/?$/i,
+    );
+    if (!currentPathMatch) return false;
+
+    mainEl =
+      document.querySelector('main, [id="content"], article') || document.body;
+
+    const trackAnchor = [...document.querySelectorAll("a[href]")].find(
+      isTrackAnchor,
+    );
+    const sessionTrack = trackAnchor ? trackAnchor.textContent.trim() : "Session";
+    const sessionId = currentPathMatch[1].toUpperCase();
+    const sessionTitle = h1.textContent.trim();
+
+    const speakerContainer = findSpeakerContainer();
+    const speakers = speakerContainer ? parseSpeakers(speakerContainer) : [];
+    let speakerToken = "";
+    let affiliationToken = "";
+
+    if (speakers.length > 0) {
+      speakerToken = sanitize(speakers[0].name);
+      if (speakers.length > 1) speakerToken += "_et_al";
+      if (speakers[0].affiliation) {
+        affiliationToken = sanitize(speakers[0].affiliation);
+      }
+    }
+
+    stem = capStemLength(
+      [
+        conference,
+        sanitize(sessionTrack),
+        extractDateToken(),
+        extractTimeToken(),
+        sessionId,
+        sanitize(sessionTitle),
+        speakerToken,
+        affiliationToken,
+      ]
+        .filter(Boolean)
+        .join("_") || "RIPE_session",
+    );
+
+    const slidesAnchors = findAllSlidesAnchors();
+
+    slidesAnchors.forEach(
+      /**
+       * Apply renamed download handling to each discovered slides anchor.
+       * @param {HTMLAnchorElement} anchor - Specifies the slides anchor to process.
+       * @returns {void} Returns nothing.
+       */
+      function processSlideAnchor(anchor) {
+        applyRenamedDownload(anchor);
+      },
+    );
+
+    if (slidesAnchors.length > 0) {
+      injectMp4Link(slidesAnchors[slidesAnchors.length - 1]);
+    }
+
+    if (!document.getElementById(PANEL_ID)) {
+      const panel = document.createElement("div");
+      panel.id = PANEL_ID;
+      panel.setAttribute("role", "region");
+      panel.setAttribute("aria-label", "RIPE session filename tools");
+      Object.assign(panel.style, {
+        position: "fixed",
+        bottom: "24px",
+        right: "24px",
+        zIndex: "9999",
+        display: "flex",
+        flexDirection: "column",
+        gap: "8px",
+        fontFamily: '-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif',
+      });
+
+      const liveRegion = document.createElement("span");
+      liveRegion.setAttribute("aria-live", "polite");
+      liveRegion.setAttribute("aria-atomic", "true");
+      Object.assign(liveRegion.style, {
+        position: "absolute",
+        width: "1px",
+        height: "1px",
+        padding: "0",
+        margin: "-1px",
+        overflow: "hidden",
+        clip: "rect(0,0,0,0)",
+        whiteSpace: "nowrap",
+        border: "0",
+      });
+      panel.appendChild(liveRegion);
+
+      /**
+       * Create the panel dismiss button that hides the floating panel on click.
+       * @returns {HTMLButtonElement} Returns a configured dismiss button element.
+       */
+      function makeDismissButton() {
+        const btn = document.createElement("button");
+        btn.textContent = "×";
+        btn.setAttribute("aria-label", "Dismiss RIPE filename tools panel");
+        btn.title = "Dismiss";
+        Object.assign(btn.style, {
+          alignSelf: "flex-end",
+          background: "transparent",
+          border: "none",
+          color: "rgba(255,255,255,0.6)",
+          cursor: "pointer",
+          fontSize: "16px",
+          lineHeight: "1",
+          padding: "0 2px",
+          userSelect: "none",
+        });
+
+        /**
+         * Hide the panel when the dismiss button is clicked.
+         * @returns {void} Returns nothing.
+         */
+        function handleDismissClick() {
+          panel.style.display = "none";
+        }
+
+        btn.addEventListener("click", handleDismissClick);
+        return btn;
+      }
+
+      panel.appendChild(makeDismissButton());
+      panel.appendChild(makeButton("pdf", liveRegion));
+      panel.appendChild(makeButton("mp4", liveRegion));
+      document.body.appendChild(panel);
+    }
+
+    return true;
+  }
+
+  if (!initScript()) {
+    const retryObserver = new MutationObserver(
+      /**
+       * Retry script initialization when DOM mutations are observed.
+       * @returns {void} Returns nothing.
+       */
+      function retryInitOnMutation() {
+        initRetryCount += 1;
+        if (initScript() || initRetryCount >= MAX_INIT_RETRIES) {
+          retryObserver.disconnect();
+        }
+      },
+    );
+    retryObserver.observe(document.body, { childList: true, subtree: true });
+  }
 })();
