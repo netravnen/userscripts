@@ -89,8 +89,10 @@
 
   /**
    * @typedef {Object} SlideFormat
-   * @property {string} icon - The Font Awesome icon name (without `fa-` prefix).
-   * @property {string} mime - The MIME type used when constructing the download Blob.
+    * @property {string} icon - Specifies the Font Awesome icon name without the
+    *   `fa-` prefix used for this file format.
+    * @property {string} mime - Specifies the MIME type string used when
+    *   constructing the Blob for the renamed download.
    */
 
   /**
@@ -116,6 +118,7 @@
 
   /**
    * Regular expression matching all handled presentation file extensions.
+    * Used to filter anchor hrefs when searching for slides download links.
    * @type {RegExp}
    */
   const SLIDES_EXT_RE = /\.(pdf|pptx?|key)$/i;
@@ -162,6 +165,23 @@
     i.setAttribute("aria-hidden", "true");
     i.style.pointerEvents = "none";
     return i;
+  }
+
+  /**
+   * Determine whether an anchor points to a same-page hash target on the
+   * current session page. Used to identify speaker biography anchors, which
+   * always link to fragment identifiers on the same URL.
+   * @param {HTMLAnchorElement} a - Specifies the candidate anchor element.
+   * @returns {boolean} Returns true when the anchor href resolves to the current
+   *   pathname with a non-empty hash fragment.
+   */
+  function isSamePageHashLink(a) {
+    try {
+      const u = new URL(a.href);
+      return u.pathname === location.pathname && !!u.hash;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -252,7 +272,7 @@
       }
     }
 
-    const m = mainEl.innerText.match(DATE_RE);
+    const m = mainEl.textContent.match(DATE_RE);
     return m ? buildDateToken(year, m[1], m[2]) : null;
   }
 
@@ -295,7 +315,7 @@
       }
     }
 
-    const m = mainEl.innerText.match(TIME_RE);
+    const m = mainEl.textContent.match(TIME_RE);
     return m ? formatTimeToken(m) : null;
   }
 
@@ -332,19 +352,7 @@
       if (!hasLabel) continue;
 
       const speakerLinks = [...el.querySelectorAll("a[href]")].filter(
-        /**
-         * Keep only speaker anchors that point to same-page hash targets.
-         * @param {HTMLAnchorElement} a - Specifies the candidate anchor.
-         * @returns {boolean} Returns true when the anchor matches the speaker pattern.
-         */
-        function isSpeakerHashLink(a) {
-          try {
-            const u = new URL(a.href);
-            return u.pathname === location.pathname && !!u.hash;
-          } catch {
-            return false;
-          }
-        },
+        isSamePageHashLink,
       );
 
       if (speakerLinks.length > 0) return el;
@@ -360,19 +368,7 @@
    */
   function parseSpeakers(container) {
     const anchors = [...container.querySelectorAll("a[href]")].filter(
-      /**
-       * Keep only speaker links that point back to this page with a hash.
-       * @param {HTMLAnchorElement} a - Specifies the candidate anchor.
-       * @returns {boolean} Returns true when the anchor is a same-page speaker link.
-       */
-      function isSpeakerAnchor(a) {
-        try {
-          const u = new URL(a.href);
-          return u.pathname === location.pathname && !!u.hash;
-        } catch {
-          return false;
-        }
-      },
+      isSamePageHashLink,
     );
 
     return anchors.map(
@@ -509,23 +505,12 @@
   }
 
   /**
-   * Extract a supported slides file extension from a validated URL.
-   * @param {URL} url - Specifies the validated slides URL.
-   * @returns {string|null} Returns a supported extension or null when unsupported.
-   */
-  function getSlidesExtension(url) {
-    const m = url.pathname.match(/\.(\w+)$/);
-    if (!m) return null;
-    const ext = m[1].toLowerCase();
-    return Object.hasOwn(SLIDES_FORMAT, ext) ? ext : null;
-  }
-
-  /**
-   * Convert a slides anchor to a renamed downloader with progress feedback.
-   * File extension and MIME type are resolved automatically from the anchor href
-   * via `SLIDES_FORMAT`. Unknown extensions fall back to a generic file icon.
-   * All slides assets are hosted on pretalx.ripe.net (cross-origin) and
-   * therefore always retrieved via `GM_xmlhttpRequest`.
+   * Convert a slides anchor to a renamed downloader with per-format icon and
+   * MIME type. The file extension is resolved automatically from the anchor href
+   * via the `SLIDES_FORMAT` map. Unknown extensions fall back to a generic file
+   * icon and `application/octet-stream`. All slides assets are hosted on
+   * `pretalx.ripe.net` (cross-origin) and are therefore always retrieved via
+   * `GM_xmlhttpRequest` regardless of format.
    * @param {HTMLAnchorElement} anchor - Specifies the slides anchor to enhance.
    * @returns {void} Returns nothing.
    */
@@ -535,10 +520,17 @@
     const trustedUrl = getTrustedSlidesUrl(anchor.href);
     if (!trustedUrl) return;
 
-    const ext = getSlidesExtension(trustedUrl);
+    let ext;
+    const m = trustedUrl.pathname.match(/\.(\w+)$/);
+    if (!m) return;
+    ext = m[1].toLowerCase();
+
     if (!ext) return;
 
-    const format = SLIDES_FORMAT[ext];
+    const format = SLIDES_FORMAT[ext] || {
+      icon: "file",
+      mime: "application/octet-stream",
+    };
     const filename = `${stem}.${ext}`;
 
     while (anchor.firstChild) anchor.removeChild(anchor.firstChild);
@@ -548,18 +540,26 @@
     anchor.dataset.ripeEnhanced = "1";
 
     /**
-     * Set the hover tooltip text on the slides icon.
+    * Set the hover tooltip text on the slides icon anchor.
      * @param {string} text - Specifies the tooltip text.
      * @returns {void} Returns nothing.
      */
-    let tooltipResetTimer = null;
+    /** @type {number|null} */
+    let pendingTimer = null;
 
     function setTooltip(text) {
-      if (tooltipResetTimer !== null) {
-        clearTimeout(tooltipResetTimer);
-        tooltipResetTimer = null;
-      }
       anchor.title = text;
+    }
+
+    /**
+     * Cancel any pending tooltip-reset timer and schedule a new one.
+     * @param {Function} fn - Specifies the named reset function to schedule.
+     * @param {number} delay - Specifies the delay in milliseconds.
+     * @returns {void} Returns nothing.
+     */
+    function scheduleTooltipReset(fn, delay) {
+      if (pendingTimer !== null) clearTimeout(pendingTimer);
+      pendingTimer = setTimeout(fn, delay);
     }
 
     /**
@@ -609,7 +609,7 @@
               setTooltip(filename);
             }
 
-            tooltipResetTimer = setTimeout(resetTooltipAfterHttpError, 4000);
+            scheduleTooltipReset(resetTooltipAfterHttpError, 4000);
             return;
           }
 
@@ -624,7 +624,7 @@
               setTooltip(filename);
             }
 
-            tooltipResetTimer = setTimeout(resetTooltipAfterEmptyResponse, 4000);
+            scheduleTooltipReset(resetTooltipAfterEmptyResponse, 4000);
             return;
           }
 
@@ -652,7 +652,7 @@
               setTooltip(filename);
             }
 
-            tooltipResetTimer = setTimeout(resetTooltipAfterMimeMismatch, 4000);
+            scheduleTooltipReset(resetTooltipAfterMimeMismatch, 4000);
             return;
           }
 
@@ -685,7 +685,7 @@
             setTooltip(filename);
           }
 
-          tooltipResetTimer = setTimeout(resetTooltipAfterSuccess, 2500);
+          scheduleTooltipReset(resetTooltipAfterSuccess, 2500);
         },
 
         /**
@@ -704,7 +704,7 @@
             setTooltip(filename);
           }
 
-          tooltipResetTimer = setTimeout(resetTooltipAfterNetworkError, 4000);
+          scheduleTooltipReset(resetTooltipAfterNetworkError, 4000);
         },
 
         /**
@@ -723,7 +723,7 @@
             setTooltip(filename);
           }
 
-          tooltipResetTimer = setTimeout(resetTooltipAfterTimeout, 4000);
+          scheduleTooltipReset(resetTooltipAfterTimeout, 4000);
         },
       });
     });
@@ -749,10 +749,12 @@
   }
 
   /**
-   * Inject an MP4 download icon directly after the last slides anchor.
-   * The recording asset is same-origin so the native `download` attribute
-   * rename is used; no `GM_xmlhttpRequest` is required.
-   * @param {HTMLAnchorElement} adjacentAnchor - Specifies the last slides anchor after which to insert.
+    * Inject an MP4 recording download icon immediately after the last slides
+    * anchor in the page. The recording asset is same-origin (`ripe*.ripe.net`)
+    * so the native `download` attribute rename is used; no `GM_xmlhttpRequest`
+    * is required.
+    * @param {HTMLAnchorElement} adjacentAnchor - Specifies the last slides anchor
+    *   element after which the MP4 icon is inserted.
    * @returns {void} Returns nothing.
    */
   function injectMp4Link(adjacentAnchor) {
@@ -820,6 +822,8 @@
     const BG_BASE = "#003d82";
     const BG_HOVER = "#0057b8";
     const BG_SUCCESS = "#1f8a4c";
+    /** @type {number|null} */
+    let resetTimer = null;
 
     const btn = document.createElement("button");
     btn.title = `${stem}.${ext}`;
@@ -857,6 +861,7 @@
      * @returns {void} Returns nothing.
      */
     function handleMouseEnter() {
+      if (btn.dataset.copied) return;
       btn.style.background = BG_HOVER;
     }
 
@@ -895,7 +900,8 @@
         btn.style.cursor = "pointer";
       }
 
-      setTimeout(resetButtonState, 1800);
+      if (resetTimer !== null) clearTimeout(resetTimer);
+      resetTimer = setTimeout(resetButtonState, 1800);
     }
 
     btn.addEventListener("click", handleButtonClick);
