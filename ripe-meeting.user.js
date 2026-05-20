@@ -114,6 +114,7 @@
       mime: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     },
     key: { icon: "file", mime: "application/octet-stream" },
+
   };
   /**
    * Map from lowercase file extension to the human-readable label shown on
@@ -127,10 +128,9 @@
     key: "Keynote",
   };
 
-
   /**
    * Regular expression matching all handled presentation file extensions.
-    * Used to filter anchor hrefs when searching for slides download links.
+   * Used to filter anchor hrefs when searching for slides download links.
    * @type {RegExp}
    */
   const SLIDES_EXT_RE = /\.(pdf|pptx?|key)$/i;
@@ -197,10 +197,10 @@
   }
 
   /**
-    * Shared inline style applied to every slides and recording download anchor.
-    * Ensures an identical box-model context so Font Awesome SVG icons share the
-    * same baseline regardless of site CSS applied to the original slides anchor.
-    * Must be spread via `Object.assign(element.style, ICON_ANCHOR_STYLE)`.
+   * Shared inline style applied to every slides and recording download anchor.
+   * Ensures an identical box-model context so Font Awesome SVG icons share the
+   * same baseline regardless of site CSS applied to the original slides anchor.
+   * Must be spread via `Object.assign(element.style, ICON_ANCHOR_STYLE)`.
    * @type {Object.<string, string>}
    */
   const ICON_ANCHOR_STYLE = {
@@ -587,6 +587,16 @@
     });
   }
 
+  /**
+   * Convert a slides anchor to a renamed downloader with per-format icon and
+   * MIME type. The file extension is resolved automatically from the anchor href
+   * via the `SLIDES_FORMAT` map. Unknown extensions fall back to a generic file
+   * icon and `application/octet-stream`. All slides assets are hosted on
+   * `pretalx.ripe.net` (cross-origin) and are therefore always retrieved via
+   * `downloadViaXhr`.
+   * @param {HTMLAnchorElement} anchor - Specifies the slides anchor to enhance.
+   * @returns {void} Returns nothing.
+   */
     if (anchor.dataset.ripeEnhanced === "1") return;
 
     const trustedUrl = getTrustedSlidesUrl(anchor.href);
@@ -598,16 +608,6 @@
     ext = m[1].toLowerCase();
 
     if (!ext) return;
-  /**
-   * Convert a slides anchor to a renamed downloader with per-format icon and
-   * MIME type. The file extension is resolved automatically from the anchor href
-   * via the `SLIDES_FORMAT` map. Unknown extensions fall back to a generic file
-   * icon and `application/octet-stream`. All slides assets are hosted on
-   * `pretalx.ripe.net` (cross-origin) and are therefore always retrieved via
-   * `downloadViaXhr`.
-   * @param {HTMLAnchorElement} anchor - Specifies the slides anchor to enhance.
-   * @returns {void} Returns nothing.
-   */
   function applyRenamedDownload(anchor) {
 
     const format = SLIDES_FORMAT[ext] || {
@@ -622,6 +622,9 @@
     anchor.setAttribute("aria-label", `Download slides: ${filename}`);
     Object.assign(anchor.style, ICON_ANCHOR_STYLE);
     anchor.dataset.ripeEnhanced = "1";
+    /** @type {number|null} */
+    let pendingTimer = null;
+
 
     /**
      * Set the hover tooltip and accessible label on the slides icon anchor.
@@ -631,9 +634,6 @@
     function setTooltip(text) {
       anchor.title = text;
       anchor.setAttribute("aria-label", text);
-    /** @type {number|null} */
-    let pendingTimer = null;
-
     }
 
     /**
@@ -765,16 +765,17 @@
   }
 
   /**
-    * Inject an MP4 recording download icon immediately after the last slides
-    * anchor in the page. The recording asset is same-origin (`ripe*.ripe.net`)
-    * so the native `download` attribute rename is used; no `GM_xmlhttpRequest`
-    * is required.
-    * @param {HTMLAnchorElement} adjacentAnchor - Specifies the last slides anchor
-    *   element after which the MP4 icon is inserted.
+   * Inject an MP4 recording download icon immediately after the last slides
+   * anchor in the page. The recording asset is same-origin (`ripe*.ripe.net`)
+   * so the native `download` attribute rename is used; no `GM_xmlhttpRequest`
+   * is required.
+   * @param {HTMLAnchorElement} adjacentAnchor - Specifies the last slides anchor
+   *   element after which the MP4 icon is inserted.
+   * @param {string|null} mp4Href - Specifies the fully-resolved MP4 recording URL,
+   *   or null when no recording is available.
    * @returns {void} Returns nothing.
    */
-  function injectMp4Link(adjacentAnchor) {
-    const mp4Href = findMp4Href();
+  function injectMp4Link(adjacentAnchor, mp4Href) {
     if (!mp4Href) return;
 
     const mp4Filename = `${stem}.mp4`;
@@ -817,29 +818,53 @@
 
     adjacentAnchor.insertAdjacentElement("afterend", link);
   }
+  // ─────────────────────────────────────────────────────────────────────────
+  // FLOATING PANEL - per-format download buttons
+  // ─────────────────────────────────────────────────────────────────────────
+
+
+
+  /**
+   * @typedef {Object} PanelDownloadConfig
+   * @property {string} label - Specifies the human-readable format label shown
+   *   on the button (e.g. "PDF", "PPTX", "Video").
+   * @property {string} icon - Specifies the FA icon name without the `fa-` prefix.
+   * @property {string} filename - Specifies the full formatted output filename
+   *   including extension, shown in the button tooltip and aria-label.
+   * @property {function(
+   *   function(number): void,
+   *   function(): void,
+   *   function(string): void
+   * ): void} triggerDownload - Specifies the function that initiates the download.
+   *   Called with three callbacks: onProgress(pct), onSuccess(), onFailure(message).
+   */
 
   const PANEL_ID = "ripe-session-copy-panel";
   /**
-   * Create a floating-panel clipboard button for a filename extension.
-   * @param {string} ext - Specifies the file extension label shown on the button.
+   * Create a floating-panel download button for a specific file format.
+   * Manages its own idle / fetching / success / error visual states independently
+   * of the in-page anchor icons.
+   * @param {PanelDownloadConfig} config - Specifies the download button configuration.
    * @param {HTMLSpanElement} liveRegion - Specifies the shared aria-live region
-   *   element used to announce copy events to screen readers.
-   * @returns {HTMLButtonElement} Returns a configured button element.
+   *   element used to announce download events to screen readers.
+   * @returns {HTMLButtonElement} Returns a configured download button element.
    */
-  function makeButton(ext, liveRegion) {
+  function makeDownloadButton(config, liveRegion) {
     const BG_BASE = "#003d82";
     const BG_HOVER = "#0057b8";
+    const BG_ERROR = "#b00020";
+
     const BG_SUCCESS = "#1f8a4c";
     /** @type {number|null} */
     let resetTimer = null;
 
     const btn = document.createElement("button");
-    btn.title = `${stem}.${ext}`;
-    btn.setAttribute("aria-label", `Copy ${stem}.${ext} filename to clipboard`);
+    btn.title = config.filename;
+    btn.setAttribute("aria-label", `Download ${config.filename}`);
 
-    const icon = faIcon("clipboard");
+    const icon = faIcon(config.icon);
     const label = document.createElement("span");
-    label.textContent = ` Copy .${ext} filename`;
+    label.textContent = ` Download ${config.label}`;
     label.style.pointerEvents = "none";
 
     btn.appendChild(icon);
@@ -866,56 +891,109 @@
     });
 
     /**
-     * Apply hover styling while the cursor is over the button, unless the
-     * copied-success state is currently active.
+     * Apply hover styling unless a download is currently active.
      * @returns {void} Returns nothing.
      */
     function handleMouseEnter() {
-      if (btn.dataset.copied) return;
+      if (btn.dataset.active) return;
       btn.style.background = BG_HOVER;
     }
 
     /**
-     * Restore base styling unless the copied state is active.
+     * Restore base styling unless a download is currently active.
      * @returns {void} Returns nothing.
      */
     function handleMouseLeave() {
-      if (!btn.dataset.copied) btn.style.background = BG_BASE;
+      if (!btn.dataset.active) btn.style.background = BG_BASE;
     }
 
     btn.addEventListener("mouseenter", handleMouseEnter);
     btn.addEventListener("mouseleave", handleMouseLeave);
 
     /**
-     * Copy the computed filename to the clipboard and show success styling.
+     * Initiate the file download and manage button visual state transitions.
      * @returns {void} Returns nothing.
      */
     function handleButtonClick() {
-      if (btn.dataset.copied) return;
-
-      GM_setClipboard(`${stem}.${ext}`, "text");
-      btn.dataset.copied = "1";
-      label.textContent = " Copied!";
-      liveRegion.textContent = `Copied: ${stem}.${ext}`;
-      btn.setAttribute("aria-label", "Filename copied to clipboard");
-      btn.style.background = BG_SUCCESS;
+      if (btn.dataset.active) return;
+      btn.dataset.active = "1";
+      label.textContent = " ⏳ Fetching…";
+      btn.setAttribute("aria-label", `Downloading ${config.label}…`);
       btn.style.cursor = "default";
 
       /**
-       * Restore button text and style after the success feedback timeout.
+       * Update button label with the current download progress percentage.
+       * @param {number} pct - Specifies the download completion percentage (0–100).
        * @returns {void} Returns nothing.
        */
-      function resetButtonState() {
-        delete btn.dataset.copied;
-        label.textContent = ` Copy .${ext} filename`;
-        liveRegion.textContent = "";
-        btn.setAttribute("aria-label", `Copy ${stem}.${ext} filename to clipboard`);
-        btn.style.background = BG_BASE;
-        btn.style.cursor = "pointer";
+      function handleDownloadProgress(pct) {
+        label.textContent = ` ⏳ ${pct}%`;
+        btn.setAttribute(
+          "aria-label",
+          `Downloading ${config.label}: ${pct}%`,
+        );
       }
 
-      if (resetTimer !== null) clearTimeout(resetTimer);
-      resetTimer = setTimeout(resetButtonState, 1800);
+      /**
+       * Switch button to success state after download completes.
+       * @returns {void} Returns nothing.
+       */
+      function handleDownloadSuccess() {
+        label.textContent = " ✓ Downloaded";
+        liveRegion.textContent = `Downloaded: ${config.filename}`;
+        btn.setAttribute("aria-label", `Downloaded: ${config.filename}`);
+        btn.style.background = BG_SUCCESS;
+
+        /**
+         * Restore button to idle state after success feedback timeout.
+         * @returns {void} Returns nothing.
+         */
+        function resetButtonState() {
+          delete btn.dataset.active;
+          label.textContent = ` Download ${config.label}`;
+          liveRegion.textContent = "";
+          btn.setAttribute("aria-label", `Download ${config.filename}`);
+          btn.style.background = BG_BASE;
+          btn.style.cursor = "pointer";
+        }
+
+        if (resetTimer !== null) clearTimeout(resetTimer);
+        resetTimer = setTimeout(resetButtonState, 2000);
+      }
+
+      /**
+       * Switch button to error state and show the failure reason.
+       * @param {string} msg - Specifies the failure reason to display.
+       * @returns {void} Returns nothing.
+       */
+      function handleDownloadFailure(msg) {
+        label.textContent = ` ❌ ${msg}`;
+        liveRegion.textContent = `Download failed: ${msg}`;
+        btn.setAttribute("aria-label", `Download failed: ${msg}`);
+        btn.style.background = BG_ERROR;
+
+        /**
+         * Restore button to idle state after failure feedback timeout.
+         * @returns {void} Returns nothing.
+         */
+        function resetButtonStateAfterError() {
+          delete btn.dataset.active;
+          label.textContent = ` Download ${config.label}`;
+          liveRegion.textContent = "";
+          btn.setAttribute("aria-label", `Download ${config.filename}`);
+          btn.style.background = BG_BASE;
+          btn.style.cursor = "pointer";
+        }
+
+        if (resetTimer !== null) clearTimeout(resetTimer);
+        resetTimer = setTimeout(resetButtonStateAfterError, 4000);
+      }
+
+      config.triggerDownload(
+        handleDownloadProgress,
+        handleDownloadSuccess,
+        handleDownloadFailure,
+      );
     }
 
     btn.addEventListener("click", handleButtonClick);
@@ -977,6 +1055,10 @@
     );
 
     const slidesAnchors = findAllSlidesAnchors();
+    // Resolve MP4 URL once — used by both injectMp4Link and the panel button.
+    const mp4Href = findMp4Href();
+    const mp4Filename = mp4Href ? `${stem}.mp4` : null;
+
 
     slidesAnchors.forEach(
       /**
@@ -990,14 +1072,14 @@
     );
 
     if (slidesAnchors.length > 0) {
-      injectMp4Link(slidesAnchors[slidesAnchors.length - 1]);
+      injectMp4Link(slidesAnchors[slidesAnchors.length - 1], mp4Href);
     }
 
     if (!document.getElementById(PANEL_ID)) {
       const panel = document.createElement("div");
       panel.id = PANEL_ID;
       panel.setAttribute("role", "region");
-      panel.setAttribute("aria-label", "RIPE session filename tools");
+      panel.setAttribute("aria-label", "RIPE session file downloads");
       Object.assign(panel.style, {
         position: "fixed",
         bottom: "24px",
@@ -1032,7 +1114,7 @@
       function makeDismissButton() {
         const btn = document.createElement("button");
         btn.textContent = "×";
-        btn.setAttribute("aria-label", "Dismiss RIPE filename tools panel");
+        btn.setAttribute("aria-label", "Dismiss RIPE file download panel");
         btn.title = "Dismiss";
         Object.assign(btn.style, {
           alignSelf: "flex-end",
@@ -1059,8 +1141,104 @@
       }
 
       panel.appendChild(makeDismissButton());
-      panel.appendChild(makeButton("pdf", liveRegion));
-      panel.appendChild(makeButton("mp4", liveRegion));
+
+      // ── One download button per slides format found on the page ──────────
+      slidesAnchors.forEach(
+        /**
+         * Create and append a panel download button for each slides anchor.
+         * @param {HTMLAnchorElement} anchor - Specifies the enhanced slides anchor.
+         * @returns {void} Returns nothing.
+         */
+        function addSlidesPanelButton(anchor) {
+          let ext;
+          try {
+            const extMatch = new URL(anchor.href).pathname.match(/\.(\w+)$/);
+            if (!extMatch) return;
+            ext = extMatch[1].toLowerCase();
+          } catch {
+            return;
+          }
+
+          const format = SLIDES_FORMAT[ext] || {
+            icon: "file",
+            mime: "application/octet-stream",
+          };
+          const filename = `${stem}.${ext}`;
+          const buttonLabel =
+            SLIDE_BUTTON_LABELS[ext] || ext.toUpperCase();
+
+          /**
+           * Trigger a cross-origin slides download via downloadViaXhr.
+           * @param {function(number): void} onProgress - Specifies the progress callback.
+           * @param {function(): void} onSuccess - Specifies the success callback.
+           * @param {function(string): void} onFailure - Specifies the failure callback.
+           * @returns {void} Returns nothing.
+           */
+          function triggerSlidesDownload(onProgress, onSuccess, onFailure) {
+            const trustedUrl = getTrustedSlidesUrl(anchor.href);
+            if (!trustedUrl) {
+              onFailure("Invalid URL");
+              return;
+            }
+            downloadViaXhr(
+              trustedUrl.href,
+              filename,
+              format,
+              onProgress,
+              onSuccess,
+              onFailure,
+            );
+          }
+
+          panel.appendChild(
+            makeDownloadButton(
+              {
+                label: buttonLabel,
+                icon: format.icon,
+                filename,
+                triggerDownload: triggerSlidesDownload,
+              },
+              liveRegion,
+            ),
+          );
+        },
+      );
+
+      // ── MP4 download button (same-origin, native download) ───────────────
+      if (mp4Href && mp4Filename) {
+        /**
+         * Trigger a same-origin MP4 download via a temporary anchor element.
+         * Progress is not tracked for native downloads; onSuccess is called
+         * immediately after the download is dispatched.
+         * @param {function(number): void} _onProgress - Specifies the progress callback (unused).
+         * @param {function(): void} onSuccess - Specifies the success callback.
+         * @param {function(string): void} _onFailure - Specifies the failure callback (unused).
+         * @returns {void} Returns nothing.
+         */
+        function triggerMp4Download(_onProgress, onSuccess, _onFailure) {
+          const dl = document.createElement("a");
+          dl.href = mp4Href;
+          dl.download = mp4Filename;
+          dl.style.display = "none";
+          document.body.appendChild(dl);
+          dl.click();
+          document.body.removeChild(dl);
+          onSuccess();
+        }
+
+        panel.appendChild(
+          makeDownloadButton(
+            {
+              label: "Video",
+              icon: "file-video",
+              filename: mp4Filename,
+              triggerDownload: triggerMp4Download,
+            },
+            liveRegion,
+          ),
+        );
+      }
+
       document.body.appendChild(panel);
     }
 
