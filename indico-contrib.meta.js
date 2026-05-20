@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name           Indico - Contribution File Downloader
 // @namespace      https://github.com/netravnen/userscripts
-// @version        0.0.1
+// @version        0.0.2
 // @description    Floating panel with per-format download buttons for Indico contribution pages (PDF/PPT/PPTX/KEY) plus YouTube/Vimeo/MP4 recording links
 // @author         -
 // @icon           https://getindico.io/favicon.ico
