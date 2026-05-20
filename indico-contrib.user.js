@@ -1283,7 +1283,10 @@
       "videos:",
       videoLinks.length,
     );
+    const eventName = extractEventName();
+    const dateToken = extractDateToken();
     const timeToken = extractTimeToken();
+    const sessionTrack = extractSessionTrack();
     const speakers = extractSpeakers();
 
     let speakerToken = "";
