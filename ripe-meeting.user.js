@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         RIPE Meeting - Copy Session Filename
+// @name         RIPE Meeting - Session File Downloader
 // @namespace    https://github.com/netravnen/userscripts
-// @version      0.2.0
-// @description  Floating panel + renamed PDF/PPT/PPTX/KEY/MP4 download on RIPE meeting session detail pages
+// @version      0.3.0
+// @description  Floating panel with per-format download buttons + renamed in-page download links (PDF/PPT/PPTX/KEY/MP4)
 // @author       -
 // @icon         https://www.ripe.net/favicon.ico
 // @license      MIT
@@ -13,7 +13,6 @@
 // @supportURL   https://github.com/netravnen/userscripts/issues
 // @require      https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/js/fontawesome.min.js
 // @require      https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/js/regular.min.js
-// @grant        GM_setClipboard
 // @grant        GM_xmlhttpRequest
 // @connect      pretalx.ripe.net
 // @noframes
@@ -114,8 +113,8 @@
       mime: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     },
     key: { icon: "file", mime: "application/octet-stream" },
-
   };
+
   /**
    * Map from lowercase file extension to the human-readable label shown on
    * the floating panel download button for that format.
@@ -596,8 +595,8 @@
    * `downloadViaXhr`.
    * @param {HTMLAnchorElement} anchor - Specifies the slides anchor to enhance.
    * @returns {void} Returns nothing.
-  function applyRenamedDownload(anchor) {
    */
+  function applyRenamedDownload(anchor) {
     if (anchor.dataset.ripeEnhanced === "1") return;
 
     const trustedUrl = getTrustedSlidesUrl(anchor.href);
@@ -621,8 +620,8 @@
     anchor.title = filename;
     anchor.setAttribute("aria-label", `Download slides: ${filename}`);
     Object.assign(anchor.style, ICON_ANCHOR_STYLE);
-
     anchor.dataset.ripeEnhanced = "1";
+
     /** @type {number|null} */
     let pendingTimer = null;
 
@@ -817,13 +816,13 @@
     link.addEventListener("click", handleMp4Click);
 
     adjacentAnchor.insertAdjacentElement("afterend", link);
-
   }
+
   // ─────────────────────────────────────────────────────────────────────────
   // FLOATING PANEL - per-format download buttons
   // ─────────────────────────────────────────────────────────────────────────
-  const PANEL_ID = "ripe-session-copy-panel";
 
+  const PANEL_ID = "ripe-session-copy-panel";
 
   /**
    * @typedef {Object} PanelDownloadConfig
@@ -851,8 +850,8 @@
    */
   function makeDownloadButton(config, liveRegion) {
     const BG_BASE = "#003d82";
-    const BG_SUCCESS = "#1f8a4c";
     const BG_HOVER = "#0057b8";
+    const BG_SUCCESS = "#1f8a4c";
     const BG_ERROR = "#b00020";
 
     /** @type {number|null} */
@@ -916,8 +915,8 @@
      */
     function handleButtonClick() {
       if (btn.dataset.active) return;
-      btn.style.cursor = "default";
       btn.dataset.active = "1";
+      btn.style.cursor = "default";
       label.textContent = " ⏳ Fetching…";
       btn.setAttribute("aria-label", `Downloading ${config.label}…`);
 
@@ -1054,8 +1053,8 @@
         .join("_") || "RIPE_session",
     );
 
-
     const slidesAnchors = findAllSlidesAnchors();
+
     // Resolve MP4 URL once — used by both injectMp4Link and the panel button.
     const mp4Href = findMp4Href();
     const mp4Filename = mp4Href ? `${stem}.mp4` : null;
