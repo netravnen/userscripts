@@ -1468,8 +1468,8 @@
       },
     );
     
-    console.log('[indico-contrib] Starting MutationObserver on document.body...');
-    retryObserver.observe(document.body, { childList: true, subtree: true, attributes: true });
+    console.log('[indico-contrib] Starting MutationObserver on document.documentElement...');
+    retryObserver.observe(document.documentElement, { childList: true, subtree: true, attributes: true });
     
     // Mechanism 2: Timeout-based retry (more aggressive for document-start timing)
     console.log('[indico-contrib] Starting timeout-based retry sequence...');
