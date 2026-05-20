@@ -115,6 +115,18 @@
     },
     key: { icon: "file", mime: "application/octet-stream" },
   };
+  /**
+   * Map from lowercase file extension to the human-readable label shown on
+   * the floating panel download button for that format.
+   * @type {Object.<string, string>}
+   */
+  const SLIDE_BUTTON_LABELS = {
+    pdf: "PDF",
+    ppt: "PPT",
+    pptx: "PPTX",
+    key: "Keynote",
+  };
+
 
   /**
    * Regular expression matching all handled presentation file extensions.
