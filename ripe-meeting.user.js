@@ -596,6 +596,7 @@
    * `downloadViaXhr`.
    * @param {HTMLAnchorElement} anchor - Specifies the slides anchor to enhance.
    * @returns {void} Returns nothing.
+  function applyRenamedDownload(anchor) {
    */
     if (anchor.dataset.ripeEnhanced === "1") return;
 
@@ -608,7 +609,6 @@
     ext = m[1].toLowerCase();
 
     if (!ext) return;
-  function applyRenamedDownload(anchor) {
 
     const format = SLIDES_FORMAT[ext] || {
       icon: "file",
@@ -621,10 +621,10 @@
     anchor.title = filename;
     anchor.setAttribute("aria-label", `Download slides: ${filename}`);
     Object.assign(anchor.style, ICON_ANCHOR_STYLE);
+
     anchor.dataset.ripeEnhanced = "1";
     /** @type {number|null} */
     let pendingTimer = null;
-
 
     /**
      * Set the hover tooltip and accessible label on the slides icon anchor.
@@ -817,11 +817,12 @@
     link.addEventListener("click", handleMp4Click);
 
     adjacentAnchor.insertAdjacentElement("afterend", link);
+
   }
   // ─────────────────────────────────────────────────────────────────────────
   // FLOATING PANEL - per-format download buttons
   // ─────────────────────────────────────────────────────────────────────────
-
+  const PANEL_ID = "ripe-session-copy-panel";
 
 
   /**
@@ -839,7 +840,6 @@
    *   Called with three callbacks: onProgress(pct), onSuccess(), onFailure(message).
    */
 
-  const PANEL_ID = "ripe-session-copy-panel";
   /**
    * Create a floating-panel download button for a specific file format.
    * Manages its own idle / fetching / success / error visual states independently
@@ -851,10 +851,10 @@
    */
   function makeDownloadButton(config, liveRegion) {
     const BG_BASE = "#003d82";
+    const BG_SUCCESS = "#1f8a4c";
     const BG_HOVER = "#0057b8";
     const BG_ERROR = "#b00020";
 
-    const BG_SUCCESS = "#1f8a4c";
     /** @type {number|null} */
     let resetTimer = null;
 
@@ -916,10 +916,10 @@
      */
     function handleButtonClick() {
       if (btn.dataset.active) return;
+      btn.style.cursor = "default";
       btn.dataset.active = "1";
       label.textContent = " ⏳ Fetching…";
       btn.setAttribute("aria-label", `Downloading ${config.label}…`);
-      btn.style.cursor = "default";
 
       /**
        * Update button label with the current download progress percentage.
@@ -1054,11 +1054,11 @@
         .join("_") || "RIPE_session",
     );
 
+
     const slidesAnchors = findAllSlidesAnchors();
     // Resolve MP4 URL once — used by both injectMp4Link and the panel button.
     const mp4Href = findMp4Href();
     const mp4Filename = mp4Href ? `${stem}.mp4` : null;
-
 
     slidesAnchors.forEach(
       /**
