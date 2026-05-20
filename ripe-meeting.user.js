@@ -31,8 +31,8 @@
 
   /**
    * Map from RIPE meeting number to the calendar year it took place.
-    * Used to reconstruct a full ISO date from the day/month shown on the session page.
-    * Meetings never span a year boundary, so a single year value is sufficient.
+   * Used to reconstruct a full ISO date from the day/month shown on the session page.
+   * Meetings never span a year boundary, so a single year value is sufficient.
    * @type {Object.<number, number>}
    */
   const MEETING_YEAR = {
@@ -69,7 +69,7 @@
 
   /**
    * Map from lowercase English month name to its zero-padded two-digit number.
-    * Keys are always lowercase; callers must call `.toLowerCase()` before lookup.
+   * Keys are always lowercase; callers must call `.toLowerCase()` before lookup.
    * @type {Object.<string, string>}
    */
   const MONTH_NUM = {
@@ -89,10 +89,10 @@
 
   /**
    * @typedef {Object} SlideFormat
-    * @property {string} icon - Specifies the Font Awesome icon name without the
-    *   `fa-` prefix used for this file format.
-    * @property {string} mime - Specifies the MIME type string used when
-    *   constructing the Blob for the renamed download.
+   * @property {string} icon - Specifies the Font Awesome icon name without the
+   *   `fa-` prefix used for this file format.
+   * @property {string} mime - Specifies the MIME type string used when
+   *   constructing the Blob for the renamed download.
    */
 
   /**
