@@ -31,13 +31,57 @@
   // ── Indico fingerprint guard ──────────────────────────────────────────────
   // Every Indico instance injects <meta name="generator" content="Indico x.y.z">.
   // This guards against the broad @match firing on non-Indico sites.
-  const generatorMeta = document.querySelector('meta[name="generator"]');
-  console.log('[indico-contrib] Generator meta:', generatorMeta?.content);
-  if (!generatorMeta || !/^indico\b/i.test(generatorMeta.content)) {
-    console.log('[indico-contrib] *** GUARD BLOCKED: Not an Indico page, exiting ***');
-    return;
+  // However, at document-start, the <head> might not be parsed yet.
+  // Solution: Defer the fingerprint check to initScript() where retries can retry it.
+  
+  let isIndicoConfirmed = false;
+  
+  /**
+   * Check if this is actually an Indico page.
+   * @returns {boolean} Returns true when Indico fingerprints are detected.
+   */
+  function isIndicoPage() {
+    if (isIndicoConfirmed) return true;
+    
+    // Primary: Check meta tag
+    const generatorMeta = document.querySelector('meta[name="generator"]');
+    if (generatorMeta && /^indico\b/i.test(generatorMeta.content)) {
+      console.log('[indico-contrib] ✓ Indico confirmed via meta tag:', generatorMeta.content);
+      isIndicoConfirmed = true;
+      return true;
+    }
+    
+    // Fallback 1: Check for Indico-specific CSS selectors that are consistent across versions
+    if (document.querySelector('.indico, .indico-global, [data-indico], #indico-root')) {
+      console.log('[indico-contrib] ✓ Indico confirmed via CSS selectors');
+      isIndicoConfirmed = true;
+      return true;
+    }
+    
+    // Fallback 2: Check for Indico-specific global variable
+    if (typeof Indico !== 'undefined' || window.Indico) {
+      console.log('[indico-contrib] ✓ Indico confirmed via window.Indico');
+      isIndicoConfirmed = true;
+      return true;
+    }
+    
+    // Fallback 3: Check for common Indico scripts in DOM
+    if (document.querySelector('script[src*="indico"]')) {
+      console.log('[indico-contrib] ✓ Indico confirmed via script tags');
+      isIndicoConfirmed = true;
+      return true;
+    }
+    
+    return false;
   }
-  console.log('[indico-contrib] ✓ Indico fingerprint detected');
+  
+  console.log('[indico-contrib] Checking if this is an Indico page...');
+  if (!isIndicoPage()) {
+    console.log('[indico-contrib] ⚠️  Indico not detected on first check (may be too early at document-start)');
+    console.log('[indico-contrib] Will retry during initialization...');
+  } else {
+    console.log('[indico-contrib] ✓ Indico fingerprint detected');
+  }
 
   // ── URL structure guard ───────────────────────────────────────────────────
   /**
@@ -47,6 +91,7 @@
   const PATH_RE = /\/event\/(\d+)\/contributions\/(\d+)\/?/;
   const pathMatch = location.pathname.match(PATH_RE);
   console.log('[indico-contrib] URL match result:', pathMatch ? `event=${pathMatch[1]}, contrib=${pathMatch[2]}` : 'NO MATCH');
+  
   if (!pathMatch) {
     console.log('[indico-contrib] *** GUARD BLOCKED: URL does not match contribution page pattern, exiting ***');
     return;
@@ -1103,6 +1148,12 @@
    * @returns {boolean} Returns true when initialization completed successfully.
    */
   function initScript() {
+    // Guard: Verify Indico is available (critical for document-start timing)
+    if (!isIndicoPage()) {
+      console.log('[indico-contrib] DEBUG: Indico not yet detectable, retrying...');
+      return false;
+    }
+    
     // Re-resolve mainEl — it may have been unavailable at an earlier retry cycle.
     mainEl =
       document.querySelector('main, [id="content"], .event-page') || document.body;
@@ -1467,6 +1518,13 @@
           console.log('[indico-contrib] ✓ SUCCESS via panic mode!');
         } else {
           console.log('[indico-contrib] ⚠️  Panic mode also failed. Script could not initialize.');
+          // Final check: Is this even an Indico page?
+          if (!isIndicoPage()) {
+            console.log('[indico-contrib] ERROR: Not actually an Indico page. Check console for details.');
+            console.log('[indico-contrib] Generator meta:', document.querySelector('meta[name="generator"]')?.content);
+            console.log('[indico-contrib] .indico class:', !!document.querySelector('.indico'));
+            console.log('[indico-contrib] Indico global:', typeof window.Indico);
+          }
         }
         retryObserver.disconnect();
       }
