@@ -473,17 +473,6 @@
   }
 
   /**
-   * Convert a slides anchor to a renamed downloader with per-format icon and
-   * MIME type. The file extension is resolved automatically from the anchor href
-   * via the `SLIDES_FORMAT` map. Unknown extensions fall back to a generic file
-   * icon and `application/octet-stream`. All slides assets are hosted on
-   * `pretalx.ripe.net` (cross-origin) and are therefore always retrieved via
-   * `GM_xmlhttpRequest` regardless of format.
-   * @param {HTMLAnchorElement} anchor - Specifies the slides anchor to enhance.
-   * @returns {void} Returns nothing.
-   */
-  function applyRenamedDownload(anchor) {
-  /**
    * Download a cross-origin file via GM_xmlhttpRequest and trigger a named
    * save using a temporary Blob object URL. Validates HTTP status, response
    * body length, and Content-Type before dispatching the download.
@@ -597,6 +586,17 @@
     ext = m[1].toLowerCase();
 
     if (!ext) return;
+  /**
+   * Convert a slides anchor to a renamed downloader with per-format icon and
+   * MIME type. The file extension is resolved automatically from the anchor href
+   * via the `SLIDES_FORMAT` map. Unknown extensions fall back to a generic file
+   * icon and `application/octet-stream`. All slides assets are hosted on
+   * `pretalx.ripe.net` (cross-origin) and are therefore always retrieved via
+   * `downloadViaXhr`.
+   * @param {HTMLAnchorElement} anchor - Specifies the slides anchor to enhance.
+   * @returns {void} Returns nothing.
+   */
+  function applyRenamedDownload(anchor) {
 
     const format = SLIDES_FORMAT[ext] || {
       icon: "file",
@@ -616,12 +616,12 @@
      * @param {string} text - Specifies the tooltip and aria-label text.
      * @returns {void} Returns nothing.
      */
-    /** @type {number|null} */
-    let pendingTimer = null;
-
     function setTooltip(text) {
       anchor.title = text;
       anchor.setAttribute("aria-label", text);
+    /** @type {number|null} */
+    let pendingTimer = null;
+
     }
 
     /**
@@ -636,7 +636,7 @@
     }
 
     /**
-     * Download the file through GM_xmlhttpRequest to enforce a custom filename.
+     * Download the file via downloadViaXhr and update the anchor tooltip state.
      * @param {MouseEvent} e - Specifies the click event.
      * @returns {void} Returns nothing.
      */
@@ -648,164 +648,66 @@
       anchor.style.opacity = "0.5";
       setTooltip("⏳ Fetching…");
 
-      GM_xmlhttpRequest({
-        method: "GET",
-        url: trustedUrl.href,
-        responseType: "arraybuffer",
-        timeout: REQUEST_TIMEOUT_MS,
+      /**
+       * Update anchor tooltip with download progress percentage.
+       * @param {number} pct - Specifies the download completion percentage.
+       * @returns {void} Returns nothing.
+       */
+      function onAnchorProgress(pct) {
+        setTooltip(`⏳ ${pct}%`);
+      }
+
+      /**
+       * Restore anchor state and show success tooltip after download.
+       * @returns {void} Returns nothing.
+       */
+      function onAnchorSuccess() {
+        delete anchor.dataset.fetching;
+        anchor.style.cursor = "pointer";
+        anchor.style.opacity = "1";
+        setTooltip(`✓ Downloaded as ${filename}`);
 
         /**
-         * Update tooltip progress during download.
-         * @param {{loaded: number, total: number}} res - Specifies the progress event data.
+         * Restore default tooltip after success feedback timeout.
          * @returns {void} Returns nothing.
          */
-        onprogress(res) {
-          if (res.total > 0) {
-            setTooltip(`⏳ ${Math.round((res.loaded / res.total) * 100)}%`);
-          }
-        },
+        function resetTooltipAfterSuccess() {
+          setTooltip(filename);
+        }
+
+        scheduleTooltipReset(resetTooltipAfterSuccess, 2500);
+      }
+
+      /**
+       * Restore anchor state and show error tooltip on download failure.
+       * @param {string} msg - Specifies the failure reason message.
+       * @returns {void} Returns nothing.
+       */
+      function onAnchorFailure(msg) {
+        delete anchor.dataset.fetching;
+        anchor.style.cursor = "pointer";
+        anchor.style.opacity = "1";
+        setTooltip(`❌ ${msg} - click to retry`);
 
         /**
-         * Complete file download and restore tooltip state.
-         * @param {{status: number, response: ArrayBuffer}} res - Specifies the response payload.
+         * Restore default tooltip after failure feedback timeout.
          * @returns {void} Returns nothing.
          */
-        onload(res) {
-          delete anchor.dataset.fetching;
-          anchor.style.cursor = "pointer";
-          anchor.style.opacity = "1";
+        function resetTooltipAfterFailure() {
+          setTooltip(filename);
+        }
 
-          if (res.status < 200 || res.status >= 400) {
-            setTooltip(`❌ HTTP ${res.status} - click to retry`);
+        scheduleTooltipReset(resetTooltipAfterFailure, 4000);
+      }
 
-            /**
-             * Restore default tooltip after a failed HTTP response.
-             * @returns {void} Returns nothing.
-             */
-            function resetTooltipAfterHttpError() {
-              setTooltip(filename);
-            }
-
-            scheduleTooltipReset(resetTooltipAfterHttpError, 4000);
-            return;
-          }
-
-          if (!(res.response instanceof ArrayBuffer) || res.response.byteLength === 0) {
-            setTooltip("❌ Empty response - click to retry");
-
-            /**
-             * Restore default tooltip after an empty response.
-             * @returns {void} Returns nothing.
-             */
-            function resetTooltipAfterEmptyResponse() {
-              setTooltip(filename);
-            }
-
-            scheduleTooltipReset(resetTooltipAfterEmptyResponse, 4000);
-            return;
-          }
-
-          const contentTypeMatch = res.responseHeaders?.match(
-            /^content-type:\s*([^\r\n;]+)/im,
-          );
-          const contentType = contentTypeMatch
-            ? contentTypeMatch[1].trim().toLowerCase()
-            : "";
-          const expectedMime = format.mime.toLowerCase();
-          const allowedGenericType = "application/octet-stream";
-          if (
-            contentType &&
-            contentType !== expectedMime &&
-            contentType !== allowedGenericType
-          ) {
-            setTooltip(`❌ Unexpected type (${contentType})`);
-
-            /**
-             * Restore default tooltip after MIME mismatch.
-             * @returns {void} Returns nothing.
-             */
-            function resetTooltipAfterMimeMismatch() {
-              setTooltip(filename);
-            }
-
-            scheduleTooltipReset(resetTooltipAfterMimeMismatch, 4000);
-            return;
-          }
-
-          const blob = new Blob([res.response], { type: format.mime });
-          const blobUrl = URL.createObjectURL(blob);
-          const dl = document.createElement("a");
-          dl.href = blobUrl;
-          dl.download = filename;
-          dl.style.display = "none";
-          document.body.appendChild(dl);
-          dl.click();
-          document.body.removeChild(dl);
-
-          /**
-           * Revoke the temporary object URL after download dispatch.
-           * @returns {void} Returns nothing.
-           */
-          function revokeBlobUrl() {
-            URL.revokeObjectURL(blobUrl);
-          }
-
-          setTimeout(revokeBlobUrl, 10_000);
-          setTooltip(`✓ Downloaded as ${filename}`);
-
-          /**
-           * Restore the default tooltip after success feedback.
-           * @returns {void} Returns nothing.
-           */
-          function resetTooltipAfterSuccess() {
-            setTooltip(filename);
-          }
-
-          scheduleTooltipReset(resetTooltipAfterSuccess, 2500);
-        },
-
-        /**
-         * Report network failures and restore tooltip state.
-         * @returns {void} Returns nothing.
-         */
-        onerror() {
-          delete anchor.dataset.fetching;
-          anchor.style.cursor = "pointer";
-          anchor.style.opacity = "1";
-          setTooltip("❌ Network error - click to retry");
-
-          /**
-           * Restore default tooltip after a network error.
-           * @returns {void} Returns nothing.
-           */
-          function resetTooltipAfterNetworkError() {
-            setTooltip(filename);
-          }
-
-          scheduleTooltipReset(resetTooltipAfterNetworkError, 4000);
-        },
-
-        /**
-         * Report request timeouts and restore tooltip state.
-         * @returns {void} Returns nothing.
-         */
-        ontimeout() {
-          delete anchor.dataset.fetching;
-          anchor.style.cursor = "pointer";
-          anchor.style.opacity = "1";
-          setTooltip("❌ Timed out - click to retry");
-
-          /**
-           * Restore default tooltip after timeout.
-           * @returns {void} Returns nothing.
-           */
-          function resetTooltipAfterTimeout() {
-            setTooltip(filename);
-          }
-
-          scheduleTooltipReset(resetTooltipAfterTimeout, 4000);
-        },
-      });
+      downloadViaXhr(
+        trustedUrl.href,
+        filename,
+        format,
+        onAnchorProgress,
+        onAnchorSuccess,
+        onAnchorFailure,
+      );
     });
   }
 
