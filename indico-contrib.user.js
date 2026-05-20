@@ -167,13 +167,28 @@
    * The element is converted to an inline SVG by the FA MutationObserver
    * loaded via `@require`.
    * @param {string} name - Specifies the icon name without the `fa-` prefix.
-   * @returns {HTMLElement} Returns a configured icon element.
+   * @returns {HTMLElement} Returns a configured icon element, or a span fallback if FA not ready.
    */
   function faIcon(name) {
     const i = document.createElement('i');
     i.className = `fa-regular fa-${name}`;
     i.setAttribute('aria-hidden', 'true');
     i.style.pointerEvents = 'none';
+    
+    // Check if FontAwesome is ready; if not, add a fallback text indicator
+    if (typeof FontAwesome === 'undefined' || !window.FontAwesome) {
+      console.log('[indico-contrib] WARNING: FontAwesome not yet loaded, icon may not render:', name);
+      // Add visual fallback
+      i.textContent = name.substring(0, 1).toUpperCase();
+      i.style.display = 'inline-block';
+      i.style.width = '1em';
+      i.style.height = '1em';
+      i.style.lineHeight = '1em';
+      i.style.textAlign = 'center';
+      i.style.fontSize = '0.8em';
+      i.style.fontWeight = 'bold';
+    }
+    
     return i;
   }
 
@@ -1183,22 +1198,26 @@
     }
 
     // ── Build floating panel (idempotent) ───────────────────────────────────
-    if (document.getElementById(PANEL_ID)) return true;
+    if (document.getElementById(PANEL_ID)) {
+      console.log('[indico-contrib] Panel already exists, skipping creation');
+      return true;
+    }
 
-    const panel = document.createElement('div');
-    panel.id = PANEL_ID;
-    panel.setAttribute('role', 'region');
-    panel.setAttribute('aria-label', 'Indico contribution file downloads');
-    Object.assign(panel.style, {
-      position: 'fixed',
-      bottom: '24px',
-      right: '24px',
-      zIndex: '9999',
-      display: 'flex',
-      flexDirection: 'column',
-      gap: '8px',
-      fontFamily: '-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif',
-    });
+    try {
+      const panel = document.createElement('div');
+      panel.id = PANEL_ID;
+      panel.setAttribute('role', 'region');
+      panel.setAttribute('aria-label', 'Indico contribution file downloads');
+      Object.assign(panel.style, {
+        position: 'fixed',
+        bottom: '24px',
+        right: '24px',
+        zIndex: '9999',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '8px',
+        fontFamily: '-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif',
+      });
 
     const liveRegion = document.createElement('span');
     liveRegion.setAttribute('aria-live', 'polite');
@@ -1358,6 +1377,10 @@
     document.body.appendChild(panel);
     console.log('[indico-contrib] SUCCESS: Panel created and appended to DOM');
     return true;
+    } catch (err) {
+      console.error('[indico-contrib] ERROR during panel creation:', err.message, err);
+      return false;
+    }
   }
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -1435,6 +1458,19 @@
     }
     
     scheduleTimeoutRetry(0);
+    
+    // Panic mode: If nothing has worked by 20 seconds, try one more time very aggressively
+    setTimeout(() => {
+      if (!document.getElementById(PANEL_ID)) {
+        console.log('[indico-contrib] [Panic Mode] Last-ditch attempt at 20s');
+        if (initScript()) {
+          console.log('[indico-contrib] ✓ SUCCESS via panic mode!');
+        } else {
+          console.log('[indico-contrib] ⚠️  Panic mode also failed. Script could not initialize.');
+        }
+        retryObserver.disconnect();
+      }
+    }, 20000);
   }
 
 })();
