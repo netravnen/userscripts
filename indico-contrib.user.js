@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name           Indico - Contribution File Downloader
 // @namespace      https://github.com/netravnen/userscripts
-// @version        0.0.1
+// @version        0.0.2
 // @description    Floating panel with per-format download buttons for Indico contribution pages (PDF/PPT/PPTX/KEY) plus YouTube/Vimeo/MP4 recording links
 // @author         -
 // @icon           https://getindico.io/favicon.ico
@@ -12,7 +12,7 @@
 // @grant          GM_xmlhttpRequest
 // @connect        *
 // @noframes
-// @run-at         document-idle
+// @run-at         document-start
 // @updateURL      https://github.com/netravnen/userscripts/raw/refs/heads/main/indico-contrib.meta.js
 // @downloadURL    https://github.com/netravnen/userscripts/raw/refs/heads/main/indico-contrib.user.js
 // @supportURL     https://github.com/netravnen/userscripts/issues
@@ -24,12 +24,20 @@
  */
 (function () {
   'use strict';
+  
+  console.log('[indico-contrib] *** SCRIPT BOOT: Starting userscript execution ***');
+  console.log('[indico-contrib] Current URL:', location.href);
 
   // ── Indico fingerprint guard ──────────────────────────────────────────────
   // Every Indico instance injects <meta name="generator" content="Indico x.y.z">.
   // This guards against the broad @match firing on non-Indico sites.
   const generatorMeta = document.querySelector('meta[name="generator"]');
-  if (!generatorMeta || !/^indico\b/i.test(generatorMeta.content)) return;
+  console.log('[indico-contrib] Generator meta:', generatorMeta?.content);
+  if (!generatorMeta || !/^indico\b/i.test(generatorMeta.content)) {
+    console.log('[indico-contrib] *** GUARD BLOCKED: Not an Indico page, exiting ***');
+    return;
+  }
+  console.log('[indico-contrib] ✓ Indico fingerprint detected');
 
   // ── URL structure guard ───────────────────────────────────────────────────
   /**
@@ -38,7 +46,12 @@
    */
   const PATH_RE = /\/event\/(\d+)\/contributions\/(\d+)\/?/;
   const pathMatch = location.pathname.match(PATH_RE);
-  if (!pathMatch) return;
+  console.log('[indico-contrib] URL match result:', pathMatch ? `event=${pathMatch[1]}, contrib=${pathMatch[2]}` : 'NO MATCH');
+  if (!pathMatch) {
+    console.log('[indico-contrib] *** GUARD BLOCKED: URL does not match contribution page pattern, exiting ***');
+    return;
+  }
+  console.log('[indico-contrib] ✓ Valid contribution page URL');
 
   /** @type {string} */
   const contribId = pathMatch[2];
@@ -96,7 +109,7 @@
   const REQUEST_TIMEOUT_MS = 60_000;
   const MAX_STEM_LENGTH = 220;
   const PANEL_ID = 'indico-contrib-dl-panel';
-  const MAX_INIT_RETRIES = 10;
+  const MAX_INIT_RETRIES = 50;  // Increased to handle React render delay (document-idle timing)
 
   // Floating panel — neutral dark colour scheme (decision D)
   const BG_BASE    = '#1e2433';
@@ -1102,22 +1115,28 @@
         );
       }
     }
-    if (!h1) return false;
+    if (!h1) {
+      console.log('[indico-contrib] DEBUG: Title element (h1/h2) not found. DOM may not be ready.');
+      return false;
+    }
 
     const contribTitle = h1.textContent.trim();
-    if (!contribTitle) return false;
+    if (!contribTitle) {
+      console.log('[indico-contrib] DEBUG: Title text is empty');
+      return false;
+    }
 
     // (mainEl already resolved above)
 
     const attachmentAnchors = findAllAttachmentAnchors();
     const videoLinks = findVideoLinks();
 
-    if (attachmentAnchors.length === 0 && videoLinks.length === 0) return false;
+    if (attachmentAnchors.length === 0 && videoLinks.length === 0) {
+      console.log('[indico-contrib] DEBUG: No attachments or videos found. Attachments:', attachmentAnchors.length, 'Videos:', videoLinks.length);
+      return false;
+    }
 
-    // ── Build filename stem ─────────────────────────────────────────────────
-    const eventName    = extractEventName();
-    const sessionTrack = extractSessionTrack();
-    const dateToken    = extractDateToken();
+    console.log('[indico-contrib] DEBUG: Initialization successful! Title found, attachments:', attachmentAnchors.length, 'videos:', videoLinks.length);
     const timeToken    = extractTimeToken();
     const speakers     = extractSpeakers();
 
@@ -1337,6 +1356,7 @@
     );
 
     document.body.appendChild(panel);
+    console.log('[indico-contrib] SUCCESS: Panel created and appended to DOM');
     return true;
   }
 
@@ -1344,7 +1364,14 @@
   // BOOT
   // ──────────────────────────────────────────────────────────────────────────
 
-  if (!initScript()) {
+  console.log('[indico-contrib] ✓ Calling initScript() immediately...');
+  
+  if (initScript()) {
+    console.log('[indico-contrib] ✓ SUCCESS on first try!');
+  } else {
+    console.log('[indico-contrib] ⏳ DOM not ready yet, initializing retry mechanisms...');
+    
+    // Mechanism 1: MutationObserver for any DOM changes
     const retryObserver = new MutationObserver(
       /**
        * Retry initialization on any DOM mutation until success or retry limit.
@@ -1352,12 +1379,62 @@
        */
       function retryInitOnMutation() {
         initRetryCount += 1;
-        if (initScript() || initRetryCount >= MAX_INIT_RETRIES) {
+        console.log('[indico-contrib] [MutationObserver] Retry attempt', initRetryCount);
+        
+        if (initScript()) {
+          console.log('[indico-contrib] ✓ SUCCESS via MutationObserver at retry', initRetryCount);
+          retryObserver.disconnect();
+          return;
+        }
+        
+        if (initRetryCount >= MAX_INIT_RETRIES) {
+          console.log('[indico-contrib] ⚠️  Reached max MutationObserver retries:', MAX_INIT_RETRIES);
           retryObserver.disconnect();
         }
       },
     );
-    retryObserver.observe(document.body, { childList: true, subtree: true });
+    
+    console.log('[indico-contrib] Starting MutationObserver on document.body...');
+    retryObserver.observe(document.body, { childList: true, subtree: true, attributes: true });
+    
+    // Mechanism 2: Timeout-based retry (more aggressive for document-start timing)
+    console.log('[indico-contrib] Starting timeout-based retry sequence...');
+    const timeoutRetries = [100, 200, 500, 750, 1000, 1500, 2000, 3000, 5000, 8000, 12000, 15000]; // ms
+    
+    /**
+     * Timeout-based retry handler.
+     * @param {number} index - Current position in retry sequence.
+     * @returns {void} Returns nothing.
+     */
+    function scheduleTimeoutRetry(index) {
+      if (index >= timeoutRetries.length) {
+        console.log('[indico-contrib] ⚠️  Reached end of timeout retry sequence (15s)');
+        return;
+      }
+      
+      if (document.getElementById(PANEL_ID)) {
+        console.log('[indico-contrib] ✓ Panel already exists, skipping timeout retry');
+        return;
+      }
+      
+      const delay = timeoutRetries[index];
+      setTimeout(() => {
+        if (document.getElementById(PANEL_ID)) {
+          console.log('[indico-contrib] ✓ Panel already exists, stopping timeout retries');
+          return;
+        }
+        
+        console.log('[indico-contrib] [Timeout] Retry attempt at', delay, 'ms (index', index, ')');
+        if (initScript()) {
+          console.log('[indico-contrib] ✓ SUCCESS via timeout retry at', delay + 'ms');
+          retryObserver.disconnect();
+        } else {
+          scheduleTimeoutRetry(index + 1);
+        }
+      }, delay);
+    }
+    
+    scheduleTimeoutRetry(0);
   }
 
 })();
