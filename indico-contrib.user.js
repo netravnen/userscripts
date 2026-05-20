@@ -1075,17 +1075,39 @@
    * @returns {boolean} Returns true when initialization completed successfully.
    */
   function initScript() {
-    const h1 = document.querySelector(
-      'h1, .contribution-title, #contribution-title, .title-block h1',
-    );
+    // Re-resolve mainEl — it may have been unavailable at an earlier retry cycle.
+    mainEl =
+      document.querySelector('main, [id="content"], .event-page') || document.body;
+
+    // Look for contribution title. Many Indico 3.x versions place title in h2 *after* the
+    // event h1. Prioritize h2 within main, but skip nav/menu headings.
+    let h1 = null;
+    
+    // First, try to find an h2 within main (contribution titles are often h2),
+    // but skip headings in navigation or with menu-like classes.
+    const h2Candidates = mainEl.querySelectorAll('h2:not(.event-menu-heading), h2:not([class*="menu"]):not([class*="nav"])');
+    if (h2Candidates.length > 0) {
+      h1 = h2Candidates[0];
+    } else if (mainEl.querySelector('h2')) {
+      // Fallback: use first h2 if no non-menu h2 found
+      h1 = mainEl.querySelector('h2');
+    }
+    
+    // If no h2, try h1 within main, then global search
+    if (!h1) {
+      h1 = mainEl.querySelector('h1, .contribution-title, #contribution-title');
+      if (!h1) {
+        h1 = document.querySelector(
+          'h1, h2, .contribution-title, #contribution-title, .title-block h1',
+        );
+      }
+    }
     if (!h1) return false;
 
     const contribTitle = h1.textContent.trim();
     if (!contribTitle) return false;
 
-    // Re-resolve mainEl — it may have been unavailable at an earlier retry cycle.
-    mainEl =
-      document.querySelector('main, [id="content"], .event-page') || document.body;
+    // (mainEl already resolved above)
 
     const attachmentAnchors = findAllAttachmentAnchors();
     const videoLinks = findVideoLinks();
