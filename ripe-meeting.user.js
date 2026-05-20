@@ -483,6 +483,109 @@
    * @returns {void} Returns nothing.
    */
   function applyRenamedDownload(anchor) {
+  /**
+   * Download a cross-origin file via GM_xmlhttpRequest and trigger a named
+   * save using a temporary Blob object URL. Validates HTTP status, response
+   * body length, and Content-Type before dispatching the download.
+   * @param {string} href - Specifies the fully-resolved HTTPS URL to fetch.
+   * @param {string} filename - Specifies the output filename for the download.
+   * @param {SlideFormat} format - Specifies the format metadata for MIME validation and Blob construction.
+   * @param {function(number): void} onProgress - Specifies the callback invoked with percentage (0–100) during fetch.
+   * @param {function(): void} onSuccess - Specifies the callback invoked when the file has been saved successfully.
+   * @param {function(string): void} onFailure - Specifies the callback invoked with an error message on any failure.
+   * @returns {void} Returns nothing.
+   */
+  function downloadViaXhr(href, filename, format, onProgress, onSuccess, onFailure) {
+    GM_xmlhttpRequest({
+      method: "GET",
+      url: href,
+      responseType: "arraybuffer",
+      timeout: REQUEST_TIMEOUT_MS,
+
+      /**
+       * Update progress during download.
+       * @param {{loaded: number, total: number}} res - Specifies the progress event data.
+       * @returns {void} Returns nothing.
+       */
+      onprogress(res) {
+        if (res.total > 0) {
+          onProgress(Math.round((res.loaded / res.total) * 100));
+        }
+      },
+
+      /**
+       * Complete file download and invoke the appropriate outcome callback.
+       * @param {{status: number, response: ArrayBuffer, responseHeaders: string}} res - Specifies the response payload.
+       * @returns {void} Returns nothing.
+       */
+      onload(res) {
+        if (res.status < 200 || res.status >= 400) {
+          onFailure(`HTTP ${res.status}`);
+          return;
+        }
+
+        if (!(res.response instanceof ArrayBuffer) || res.response.byteLength === 0) {
+          onFailure("Empty response");
+          return;
+        }
+
+        const contentTypeMatch = res.responseHeaders?.match(
+          /^content-type:\s*([^\r\n;]+)/im,
+        );
+        const contentType = contentTypeMatch
+          ? contentTypeMatch[1].trim().toLowerCase()
+          : "";
+        const expectedMime = format.mime.toLowerCase();
+
+        if (
+          contentType &&
+          contentType !== expectedMime &&
+          contentType !== "application/octet-stream"
+        ) {
+          onFailure(`Unexpected type (${contentType})`);
+          return;
+        }
+
+        const blob = new Blob([res.response], { type: format.mime });
+        const blobUrl = URL.createObjectURL(blob);
+        const dl = document.createElement("a");
+        dl.href = blobUrl;
+        dl.download = filename;
+        dl.style.display = "none";
+        document.body.appendChild(dl);
+        dl.click();
+        document.body.removeChild(dl);
+
+        /**
+         * Revoke the temporary object URL after download dispatch.
+         * @returns {void} Returns nothing.
+         */
+        function revokeBlobUrl() {
+          URL.revokeObjectURL(blobUrl);
+        }
+
+        setTimeout(revokeBlobUrl, 10_000);
+        onSuccess();
+      },
+
+      /**
+       * Invoke failure callback on network error.
+       * @returns {void} Returns nothing.
+       */
+      onerror() {
+        onFailure("Network error");
+      },
+
+      /**
+       * Invoke failure callback on request timeout.
+       * @returns {void} Returns nothing.
+       */
+      ontimeout() {
+        onFailure("Timed out");
+      },
+    });
+  }
+
     if (anchor.dataset.ripeEnhanced === "1") return;
 
     const trustedUrl = getTrustedSlidesUrl(anchor.href);
