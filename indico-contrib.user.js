@@ -12,7 +12,7 @@
 // @grant          GM_xmlhttpRequest
 // @connect        *
 // @noframes
-// @run-at         document-start
+// @run-at         document-end
 // @updateURL      https://github.com/netravnen/userscripts/raw/refs/heads/main/indico-contrib.meta.js
 // @downloadURL    https://github.com/netravnen/userscripts/raw/refs/heads/main/indico-contrib.user.js
 // @supportURL     https://github.com/netravnen/userscripts/issues
@@ -23,65 +23,74 @@
  * @returns {void} Returns nothing.
  */
 (function () {
-  'use strict';
-  
-  console.log('[indico-contrib] *** SCRIPT BOOT: Starting userscript execution ***');
-  console.log('[indico-contrib] Current URL:', location.href);
+  "use strict";
+
+  console.log(
+    "[indico-contrib] *** SCRIPT BOOT: Starting userscript execution ***",
+  );
+  console.log("[indico-contrib] Current URL:", location.href);
 
   // ── Indico fingerprint guard ──────────────────────────────────────────────
   // Every Indico instance injects <meta name="generator" content="Indico x.y.z">.
   // This guards against the broad @match firing on non-Indico sites.
-  // However, at document-start, the <head> might not be parsed yet.
-  // Solution: Defer the fingerprint check to initScript() where retries can retry it.
-  
+  // At document-end, head is fully parsed so meta tag will exist if it's Indico.
+
   let isIndicoConfirmed = false;
-  
+
   /**
    * Check if this is actually an Indico page.
    * @returns {boolean} Returns true when Indico fingerprints are detected.
    */
   function isIndicoPage() {
     if (isIndicoConfirmed) return true;
-    
-    // Primary: Check meta tag
+
+    // Primary: Check meta tag (will exist at document-end if it's Indico)
     const generatorMeta = document.querySelector('meta[name="generator"]');
     if (generatorMeta && /^indico\b/i.test(generatorMeta.content)) {
-      console.log('[indico-contrib] ✓ Indico confirmed via meta tag:', generatorMeta.content);
+      console.log(
+        "[indico-contrib] ✓ Indico confirmed via meta tag:",
+        generatorMeta.content,
+      );
       isIndicoConfirmed = true;
       return true;
     }
-    
-    // Fallback 1: Check for Indico-specific CSS selectors that are consistent across versions
-    if (document.querySelector('.indico, .indico-global, [data-indico], #indico-root')) {
-      console.log('[indico-contrib] ✓ Indico confirmed via CSS selectors');
+
+    // Fallback 1: Check for Indico-specific CSS selectors
+    if (
+      document.querySelector(
+        ".indico, .indico-global, [data-indico], #indico-root",
+      )
+    ) {
+      console.log("[indico-contrib] ✓ Indico confirmed via CSS selectors");
       isIndicoConfirmed = true;
       return true;
     }
-    
+
     // Fallback 2: Check for Indico-specific global variable
-    if (typeof Indico !== 'undefined' || window.Indico) {
-      console.log('[indico-contrib] ✓ Indico confirmed via window.Indico');
+    if (typeof Indico !== "undefined" || window.Indico) {
+      console.log("[indico-contrib] ✓ Indico confirmed via window.Indico");
       isIndicoConfirmed = true;
       return true;
     }
-    
+
     // Fallback 3: Check for common Indico scripts in DOM
     if (document.querySelector('script[src*="indico"]')) {
-      console.log('[indico-contrib] ✓ Indico confirmed via script tags');
+      console.log("[indico-contrib] ✓ Indico confirmed via script tags");
       isIndicoConfirmed = true;
       return true;
     }
-    
+
     return false;
   }
-  
-  console.log('[indico-contrib] Checking if this is an Indico page...');
+
+  console.log("[indico-contrib] Checking if this is an Indico page...");
   if (!isIndicoPage()) {
-    console.log('[indico-contrib] ⚠️  Indico not detected on first check (may be too early at document-start)');
-    console.log('[indico-contrib] Will retry during initialization...');
-  } else {
-    console.log('[indico-contrib] ✓ Indico fingerprint detected');
+    console.log(
+      "[indico-contrib] *** GUARD BLOCKED: Not an Indico page, exiting ***",
+    );
+    return;
   }
+  console.log("[indico-contrib] ✓ Indico fingerprint detected");
 
   // ── URL structure guard ───────────────────────────────────────────────────
   /**
@@ -90,13 +99,18 @@
    */
   const PATH_RE = /\/event\/(\d+)\/contributions\/(\d+)\/?/;
   const pathMatch = location.pathname.match(PATH_RE);
-  console.log('[indico-contrib] URL match result:', pathMatch ? `event=${pathMatch[1]}, contrib=${pathMatch[2]}` : 'NO MATCH');
-  
+  console.log(
+    "[indico-contrib] URL match result:",
+    pathMatch ? `event=${pathMatch[1]}, contrib=${pathMatch[2]}` : "NO MATCH",
+  );
+
   if (!pathMatch) {
-    console.log('[indico-contrib] *** GUARD BLOCKED: URL does not match contribution page pattern, exiting ***');
+    console.log(
+      "[indico-contrib] *** GUARD BLOCKED: URL does not match contribution page pattern, exiting ***",
+    );
     return;
   }
-  console.log('[indico-contrib] ✓ Valid contribution page URL');
+  console.log("[indico-contrib] ✓ Valid contribution page URL");
 
   /** @type {string} */
   const contribId = pathMatch[2];
@@ -117,20 +131,20 @@
    */
   const SLIDES_FORMAT = {
     pdf: {
-      icon: 'file-pdf',
-      mime: 'application/pdf',
+      icon: "file-pdf",
+      mime: "application/pdf",
     },
     ppt: {
-      icon: 'file-powerpoint',
-      mime: 'application/vnd.ms-powerpoint',
+      icon: "file-powerpoint",
+      mime: "application/vnd.ms-powerpoint",
     },
     pptx: {
-      icon: 'file-powerpoint',
-      mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      icon: "file-powerpoint",
+      mime: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     },
     key: {
-      icon: 'file',
-      mime: 'application/octet-stream',
+      icon: "file",
+      mime: "application/octet-stream",
     },
   };
 
@@ -139,10 +153,10 @@
    * @type {Object.<string, string>}
    */
   const SLIDE_BUTTON_LABELS = {
-    pdf: 'PDF',
-    ppt: 'PPT',
-    pptx: 'PPTX',
-    key: 'Keynote',
+    pdf: "PDF",
+    ppt: "PPT",
+    pptx: "PPTX",
+    key: "Keynote",
   };
 
   /**
@@ -153,28 +167,37 @@
 
   const REQUEST_TIMEOUT_MS = 60_000;
   const MAX_STEM_LENGTH = 220;
-  const PANEL_ID = 'indico-contrib-dl-panel';
-  const MAX_INIT_RETRIES = 50;  // Increased to handle React render delay (document-idle timing)
+  const PANEL_ID = "indico-contrib-dl-panel";
+  const MAX_INIT_RETRIES = 50; // Increased to handle React render delay (document-idle timing)
 
   // Floating panel — neutral dark colour scheme (decision D)
-  const BG_BASE    = '#1e2433';
-  const BG_HOVER   = '#2d3a52';
-  const BG_SUCCESS = '#1f8a4c';
-  const BG_ERROR   = '#b00020';
+  const BG_BASE = "#1e2433";
+  const BG_HOVER = "#2d3a52";
+  const BG_SUCCESS = "#1f8a4c";
+  const BG_ERROR = "#b00020";
 
   /** @type {number} */
   let initRetryCount = 0;
   /** @type {string} */
-  let stem = 'indico_contrib';
+  let stem = "indico_contrib";
 
   /**
    * Map from lowercase English month name to its zero-padded two-digit number.
    * @type {Object.<string, string>}
    */
   const MONTH_NUM = {
-    january: '01', february: '02', march: '03',    april: '04',
-    may: '05',     june: '06',     july: '07',     august: '08',
-    september: '09', october: '10', november: '11', december: '12',
+    january: "01",
+    february: "02",
+    march: "03",
+    april: "04",
+    may: "05",
+    june: "06",
+    july: "07",
+    august: "08",
+    september: "09",
+    october: "10",
+    november: "11",
+    december: "12",
   };
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -188,14 +211,14 @@
    */
   function sanitize(str) {
     return str
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/'/g, '')
-      .replace(/[:/\\|]/g, '')
-      .replace(/[\s\-]+/g, '_')
-      .replace(/[^a-zA-Z0-9_]/g, '_')
-      .replace(/_+/g, '_')
-      .replace(/^_+|_+$/g, '');
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/'/g, "")
+      .replace(/[:/\\|]/g, "")
+      .replace(/[\s\-]+/g, "_")
+      .replace(/[^a-zA-Z0-9_]/g, "_")
+      .replace(/_+/g, "_")
+      .replace(/^_+|_+$/g, "");
   }
 
   /**
@@ -204,7 +227,7 @@
    * @returns {string} Returns a bounded stem.
    */
   function capStemLength(value) {
-    return value.slice(0, MAX_STEM_LENGTH).replace(/_+$/g, '');
+    return value.slice(0, MAX_STEM_LENGTH).replace(/_+$/g, "");
   }
 
   /**
@@ -215,25 +238,28 @@
    * @returns {HTMLElement} Returns a configured icon element, or a span fallback if FA not ready.
    */
   function faIcon(name) {
-    const i = document.createElement('i');
+    const i = document.createElement("i");
     i.className = `fa-regular fa-${name}`;
-    i.setAttribute('aria-hidden', 'true');
-    i.style.pointerEvents = 'none';
-    
+    i.setAttribute("aria-hidden", "true");
+    i.style.pointerEvents = "none";
+
     // Check if FontAwesome is ready; if not, add a fallback text indicator
-    if (typeof FontAwesome === 'undefined' || !window.FontAwesome) {
-      console.log('[indico-contrib] WARNING: FontAwesome not yet loaded, icon may not render:', name);
+    if (typeof FontAwesome === "undefined" || !window.FontAwesome) {
+      console.log(
+        "[indico-contrib] WARNING: FontAwesome not yet loaded, icon may not render:",
+        name,
+      );
       // Add visual fallback
       i.textContent = name.substring(0, 1).toUpperCase();
-      i.style.display = 'inline-block';
-      i.style.width = '1em';
-      i.style.height = '1em';
-      i.style.lineHeight = '1em';
-      i.style.textAlign = 'center';
-      i.style.fontSize = '0.8em';
-      i.style.fontWeight = 'bold';
+      i.style.display = "inline-block";
+      i.style.width = "1em";
+      i.style.height = "1em";
+      i.style.lineHeight = "1em";
+      i.style.textAlign = "center";
+      i.style.fontSize = "0.8em";
+      i.style.fontWeight = "bold";
     }
-    
+
     return i;
   }
 
@@ -244,14 +270,14 @@
    * @type {Object.<string, string>}
    */
   const ICON_ANCHOR_STYLE = {
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    verticalAlign: 'middle',
-    lineHeight: '1',
-    fontSize: '1.15em',
-    textDecoration: 'none',
-    cursor: 'pointer',
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    verticalAlign: "middle",
+    lineHeight: "1",
+    fontSize: "1.15em",
+    textDecoration: "none",
+    cursor: "pointer",
   };
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -264,7 +290,8 @@
    * @type {HTMLElement}
    */
   let mainEl =
-    document.querySelector('main, [id="content"], .event-page') || document.body;
+    document.querySelector('main, [id="content"], .event-page') ||
+    document.body;
 
   // ──────────────────────────────────────────────────────────────────────────
   // METADATA EXTRACTION
@@ -292,7 +319,7 @@
   function getBreadcrumbLinks() {
     return [
       ...document.querySelectorAll(
-        '.breadcrumbs a, .i-breadcrumbs a, nav.breadcrumbs a, ol.breadcrumb a',
+        ".breadcrumbs a, .i-breadcrumbs a, nav.breadcrumbs a, ol.breadcrumb a",
       ),
     ].filter(
       /**
@@ -302,7 +329,7 @@
        */
       function keepMeaningfulLink(a) {
         const t = a.textContent.trim().toLowerCase();
-        return t !== '' && t !== 'home';
+        return t !== "" && t !== "home";
       },
     );
   }
@@ -320,13 +347,15 @@
     // Fallback — document.title is typically "Contribution Title · Event Name · Indico"
     const parts = document.title
       .split(/[·\-—]/)
-      .map(function trimPart(s) { return s.trim(); })
+      .map(function trimPart(s) {
+        return s.trim();
+      })
       .filter(Boolean);
 
     if (parts.length >= 3) return parts[parts.length - 2];
     if (parts.length === 2) return parts[1];
 
-    return '';
+    return "";
   }
 
   /**
@@ -335,17 +364,17 @@
    * @returns {string} Returns the session name, or an empty string when not found.
    */
   function extractSessionTrack() {
-    for (const dt of mainEl.querySelectorAll('dt')) {
+    for (const dt of mainEl.querySelectorAll("dt")) {
       if (/^\s*(session|track|module)\s*$/i.test(dt.textContent)) {
         const dd = dt.nextElementSibling;
-        if (dd && dd.tagName === 'DD') return dd.textContent.trim();
+        if (dd && dd.tagName === "DD") return dd.textContent.trim();
       }
     }
 
     const links = getBreadcrumbLinks();
     if (links.length >= 2) return links[1].textContent.trim();
 
-    return '';
+    return "";
   }
 
   /**
@@ -367,27 +396,29 @@
    * @returns {string|null} Returns a date token, or null when not found.
    */
   function extractDateToken() {
-    const timeEl = mainEl.querySelector('time[datetime]');
+    const timeEl = mainEl.querySelector("time[datetime]");
     if (timeEl) {
-      const token = isoToDateToken(timeEl.getAttribute('datetime') || '');
+      const token = isoToDateToken(timeEl.getAttribute("datetime") || "");
       if (token) return token;
     }
 
-    for (const dt of mainEl.querySelectorAll('dt')) {
+    for (const dt of mainEl.querySelectorAll("dt")) {
       if (/^\s*date\s*$/i.test(dt.textContent)) {
         const dd = dt.nextElementSibling;
         if (!dd) continue;
 
-        const innerTime = dd.querySelector('time[datetime]');
+        const innerTime = dd.querySelector("time[datetime]");
         if (innerTime) {
-          const token = isoToDateToken(innerTime.getAttribute('datetime') || '');
+          const token = isoToDateToken(
+            innerTime.getAttribute("datetime") || "",
+          );
           if (token) return token;
         }
 
         const m = dd.textContent.match(DATE_FULL_RE);
         if (m) {
           const mm = MONTH_NUM[m[2].toLowerCase()];
-          const day = String(parseInt(m[1], 10)).padStart(2, '0');
+          const day = String(parseInt(m[1], 10)).padStart(2, "0");
           return `${m[3]}${mm}${day}`;
         }
       }
@@ -396,7 +427,7 @@
     const m = mainEl.textContent.match(DATE_FULL_RE);
     if (m) {
       const mm = MONTH_NUM[m[2].toLowerCase()];
-      const day = String(parseInt(m[1], 10)).padStart(2, '0');
+      const day = String(parseInt(m[1], 10)).padStart(2, "0");
       return `${m[3]}${mm}${day}`;
     }
 
@@ -411,19 +442,19 @@
    * @returns {string|null} Returns an HHMM token, or null when not found.
    */
   function extractTimeToken() {
-    const timeEl = mainEl.querySelector('time[datetime]');
+    const timeEl = mainEl.querySelector("time[datetime]");
     if (timeEl) {
-      const dtAttr = timeEl.getAttribute('datetime') || '';
+      const dtAttr = timeEl.getAttribute("datetime") || "";
       const m = dtAttr.match(/T(\d{2}):(\d{2})/);
       if (m) return m[1] + m[2];
     }
 
-    for (const dt of mainEl.querySelectorAll('dt')) {
+    for (const dt of mainEl.querySelectorAll("dt")) {
       if (/^\s*(date|time)\s*$/i.test(dt.textContent)) {
         const dd = dt.nextElementSibling;
         if (!dd) continue;
         const m = dd.textContent.match(TIME_RE);
-        if (m) return m[1].padStart(2, '0') + m[2];
+        if (m) return m[1].padStart(2, "0") + m[2];
       }
     }
 
@@ -446,7 +477,7 @@
   function parseSpeakerContainer(container) {
     const results = [];
 
-    const nameEls = container.querySelectorAll('.person-name, .speaker-name');
+    const nameEls = container.querySelectorAll(".person-name, .speaker-name");
     if (nameEls.length > 0) {
       nameEls.forEach(
         /**
@@ -458,24 +489,30 @@
           const name = el.textContent.trim();
           if (!name) return;
 
-          let affiliation = '';
+          let affiliation = "";
           const sibling = el.nextElementSibling;
 
           if (
             sibling &&
             /affiliation|organisation|organization|company/i.test(
-              sibling.className + ' ' + (sibling.getAttribute('title') || ''),
+              sibling.className + " " + (sibling.getAttribute("title") || ""),
             )
           ) {
             affiliation = sibling.textContent
-              .replace(/^[\s,()]+|[\s,()]+$/g, '')
+              .replace(/^[\s,()]+|[\s,()]+$/g, "")
               .trim();
           } else {
             let node = el.nextSibling;
             while (node) {
               if (node.nodeType === Node.TEXT_NODE) {
-                const raw = node.textContent.replace(/^[\s,()]+|[\s,()]+$/g, '');
-                if (raw) { affiliation = raw; break; }
+                const raw = node.textContent.replace(
+                  /^[\s,()]+|[\s,()]+$/g,
+                  "",
+                );
+                if (raw) {
+                  affiliation = raw;
+                  break;
+                }
               } else if (node.nodeType === Node.ELEMENT_NODE) {
                 break;
               }
@@ -491,7 +528,7 @@
     }
 
     // Fallback: any anchor elements within the container
-    container.querySelectorAll('a[href]').forEach(
+    container.querySelectorAll("a[href]").forEach(
       /**
        * Extract speaker name from a container anchor.
        * @param {HTMLAnchorElement} a - Specifies the speaker anchor.
@@ -499,15 +536,15 @@
        */
       function extractSpeakerFromAnchor(a) {
         const name = a.textContent.trim();
-        if (name) results.push({ name, affiliation: '' });
+        if (name) results.push({ name, affiliation: "" });
       },
     );
 
     if (results.length > 0) return results;
 
     // Last resort: first line of container textContent
-    const text = container.textContent.trim().split('\n')[0].trim();
-    if (text) results.push({ name: text, affiliation: '' });
+    const text = container.textContent.trim().split("\n")[0].trim();
+    if (text) results.push({ name: text, affiliation: "" });
 
     return results;
   }
@@ -518,15 +555,15 @@
    * @returns {Speaker[]} Returns an array of speaker entries, possibly empty.
    */
   function extractSpeakers() {
-    for (const dt of mainEl.querySelectorAll('dt')) {
+    for (const dt of mainEl.querySelectorAll("dt")) {
       if (/^\s*speakers?\s*$/i.test(dt.textContent)) {
         const dd = dt.nextElementSibling;
-        if (dd && dd.tagName === 'DD') return parseSpeakerContainer(dd);
+        if (dd && dd.tagName === "DD") return parseSpeakerContainer(dd);
       }
     }
 
     const speakerContainer = mainEl.querySelector(
-      '.speaker-list, .contrib-speakers, .speaker-metadata, .speakers',
+      ".speaker-list, .contrib-speakers, .speaker-metadata, .speakers",
     );
     if (speakerContainer) return parseSpeakerContainer(speakerContainer);
 
@@ -565,12 +602,14 @@
 
     const tier2 = [
       ...mainEl.querySelectorAll(
-        '.attachments-box a[href], .attachment-link[href], .material-list a[href], .material a[href]',
+        ".attachments-box a[href], .attachment-link[href], .material-list a[href], .material a[href]",
       ),
     ].filter(hasKnownPresentationExt);
     if (tier2.length > 0) return tier2;
 
-    return [...mainEl.querySelectorAll('a[href]')].filter(hasKnownPresentationExt);
+    return [...mainEl.querySelectorAll("a[href]")].filter(
+      hasKnownPresentationExt,
+    );
   }
 
   /**
@@ -581,7 +620,7 @@
   function getTrustedAttachmentUrl(href) {
     try {
       const url = new URL(href);
-      if (url.protocol !== 'https:') return null;
+      if (url.protocol !== "https:") return null;
       return url;
     } catch {
       return null;
@@ -611,7 +650,7 @@
     const results = [];
 
     let scope = mainEl;
-    for (const heading of mainEl.querySelectorAll('h2, h3, h4, h5')) {
+    for (const heading of mainEl.querySelectorAll("h2, h3, h4, h5")) {
       if (/^\s*(?:recording|video)s?\s*$/i.test(heading.textContent)) {
         scope = heading.parentElement || mainEl;
         break;
@@ -627,44 +666,50 @@
       if (!href || seen.has(href)) return;
 
       let u;
-      try { u = new URL(href); } catch { return; }
+      try {
+        u = new URL(href);
+      } catch {
+        return;
+      }
 
       if (
         /(?:^|\.)youtube\.com$/i.test(u.hostname) &&
         /\/(?:watch|embed)\b/.test(u.pathname)
       ) {
         seen.add(href);
-        results.push({ href, type: 'youtube' });
+        results.push({ href, type: "youtube" });
         return;
       }
 
       if (/^youtu\.be$/i.test(u.hostname)) {
         seen.add(href);
-        results.push({ href, type: 'youtube' });
+        results.push({ href, type: "youtube" });
         return;
       }
 
       if (/(?:^|\.)vimeo\.com$/i.test(u.hostname)) {
         seen.add(href);
-        results.push({ href, type: 'vimeo' });
+        results.push({ href, type: "vimeo" });
         return;
       }
 
       if (/\.mp4(?:\?|$)/i.test(u.pathname)) {
         seen.add(href);
-        results.push({ href, type: 'mp4' });
+        results.push({ href, type: "mp4" });
       }
     }
 
-    for (const a of scope.querySelectorAll('a[href]')) {
+    for (const a of scope.querySelectorAll("a[href]")) {
       classifyAndRecord(a.href);
     }
 
-    for (const v of scope.querySelectorAll('video[src], video > source[src]')) {
-      const rawSrc = v.getAttribute('src') || '';
+    for (const v of scope.querySelectorAll("video[src], video > source[src]")) {
+      const rawSrc = v.getAttribute("src") || "";
       try {
         classifyAndRecord(new URL(rawSrc, location.href).href);
-      } catch { /* skip malformed src */ }
+      } catch {
+        /* skip malformed src */
+      }
     }
 
     return results;
@@ -686,11 +731,18 @@
    * @param {function(string): void} onFailure - Specifies the failure callback.
    * @returns {void} Returns nothing.
    */
-  function downloadViaXhr(href, filename, format, onProgress, onSuccess, onFailure) {
+  function downloadViaXhr(
+    href,
+    filename,
+    format,
+    onProgress,
+    onSuccess,
+    onFailure,
+  ) {
     GM_xmlhttpRequest({
-      method: 'GET',
+      method: "GET",
       url: href,
-      responseType: 'arraybuffer',
+      responseType: "arraybuffer",
       timeout: REQUEST_TIMEOUT_MS,
 
       /**
@@ -715,26 +767,31 @@
           return;
         }
 
-        if (!(res.response instanceof ArrayBuffer) || res.response.byteLength === 0) {
-          onFailure('Empty response');
+        if (
+          !(res.response instanceof ArrayBuffer) ||
+          res.response.byteLength === 0
+        ) {
+          onFailure("Empty response");
           return;
         }
 
-        const ctMatch = res.responseHeaders?.match(/^content-type:\s*([^\r\n;]+)/im);
-        const ct = ctMatch ? ctMatch[1].trim().toLowerCase() : '';
+        const ctMatch = res.responseHeaders?.match(
+          /^content-type:\s*([^\r\n;]+)/im,
+        );
+        const ct = ctMatch ? ctMatch[1].trim().toLowerCase() : "";
         const expected = format.mime.toLowerCase();
 
-        if (ct && ct !== expected && ct !== 'application/octet-stream') {
+        if (ct && ct !== expected && ct !== "application/octet-stream") {
           onFailure(`Unexpected type (${ct})`);
           return;
         }
 
         const blob = new Blob([res.response], { type: format.mime });
         const blobUrl = URL.createObjectURL(blob);
-        const dl = document.createElement('a');
+        const dl = document.createElement("a");
         dl.href = blobUrl;
         dl.download = filename;
-        dl.style.display = 'none';
+        dl.style.display = "none";
         document.body.appendChild(dl);
         dl.click();
         document.body.removeChild(dl);
@@ -756,7 +813,7 @@
        * @returns {void} Returns nothing.
        */
       onerror() {
-        onFailure('Network error');
+        onFailure("Network error");
       },
 
       /**
@@ -764,7 +821,7 @@
        * @returns {void} Returns nothing.
        */
       ontimeout() {
-        onFailure('Timed out');
+        onFailure("Timed out");
       },
     });
   }
@@ -780,7 +837,7 @@
    * @returns {void} Returns nothing.
    */
   function applyRenamedDownload(anchor) {
-    if (anchor.dataset.indicoEnhanced === '1') return;
+    if (anchor.dataset.indicoEnhanced === "1") return;
 
     const trustedUrl = getTrustedAttachmentUrl(anchor.href);
     if (!trustedUrl) return;
@@ -789,15 +846,18 @@
     if (!extMatch) return;
     const ext = extMatch[1].toLowerCase();
 
-    const format = SLIDES_FORMAT[ext] || { icon: 'file', mime: 'application/octet-stream' };
+    const format = SLIDES_FORMAT[ext] || {
+      icon: "file",
+      mime: "application/octet-stream",
+    };
     const filename = `${stem}.${ext}`;
 
     while (anchor.firstChild) anchor.removeChild(anchor.firstChild);
     anchor.appendChild(faIcon(format.icon));
     anchor.title = filename;
-    anchor.setAttribute('aria-label', `Download slides: ${filename}`);
+    anchor.setAttribute("aria-label", `Download slides: ${filename}`);
     Object.assign(anchor.style, ICON_ANCHOR_STYLE);
-    anchor.dataset.indicoEnhanced = '1';
+    anchor.dataset.indicoEnhanced = "1";
 
     /** @type {number|null} */
     let pendingTimer = null;
@@ -809,7 +869,7 @@
      */
     function setTooltip(text) {
       anchor.title = text;
-      anchor.setAttribute('aria-label', text);
+      anchor.setAttribute("aria-label", text);
     }
 
     /**
@@ -828,14 +888,14 @@
      * @param {MouseEvent} e - Specifies the click event.
      * @returns {void} Returns nothing.
      */
-    anchor.addEventListener('click', function handleDownload(e) {
+    anchor.addEventListener("click", function handleDownload(e) {
       e.preventDefault();
       if (anchor.dataset.fetching) return;
 
-      anchor.dataset.fetching = '1';
-      anchor.style.cursor = 'wait';
-      anchor.style.opacity = '0.5';
-      setTooltip('⏳ Fetching…');
+      anchor.dataset.fetching = "1";
+      anchor.style.cursor = "wait";
+      anchor.style.opacity = "0.5";
+      setTooltip("⏳ Fetching…");
 
       /**
        * Update tooltip with download progress percentage.
@@ -852,8 +912,8 @@
        */
       function onAnchorSuccess() {
         delete anchor.dataset.fetching;
-        anchor.style.cursor = 'pointer';
-        anchor.style.opacity = '1';
+        anchor.style.cursor = "pointer";
+        anchor.style.opacity = "1";
         setTooltip(`✓ Downloaded as ${filename}`);
 
         /**
@@ -874,8 +934,8 @@
        */
       function onAnchorFailure(msg) {
         delete anchor.dataset.fetching;
-        anchor.style.cursor = 'pointer';
-        anchor.style.opacity = '1';
+        anchor.style.cursor = "pointer";
+        anchor.style.opacity = "1";
         setTooltip(`❌ ${msg} – click to retry`);
 
         /**
@@ -916,39 +976,39 @@
     const linkId = `indico-video-${videoLink.type}`;
     if (document.getElementById(linkId)) return;
 
-    const isDirect = videoLink.type === 'mp4';
+    const isDirect = videoLink.type === "mp4";
     const videoFilename = `${stem}.mp4`;
 
-    const link = document.createElement('a');
+    const link = document.createElement("a");
     link.id = linkId;
     link.href = videoLink.href;
 
     if (isDirect) {
       link.download = videoFilename;
       link.title = videoFilename;
-      link.setAttribute('aria-label', `Download recording: ${videoFilename}`);
+      link.setAttribute("aria-label", `Download recording: ${videoFilename}`);
     } else {
       const label =
-        videoLink.type === 'youtube' ? 'YouTube recording' : 'Vimeo recording';
-      link.target = '_blank';
-      link.rel = 'noopener noreferrer';
+        videoLink.type === "youtube" ? "YouTube recording" : "Vimeo recording";
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
       link.title = label;
-      link.setAttribute('aria-label', `Open ${label}`);
+      link.setAttribute("aria-label", `Open ${label}`);
     }
 
-    link.appendChild(faIcon(isDirect ? 'file-video' : 'circle-play'));
+    link.appendChild(faIcon(isDirect ? "file-video" : "circle-play"));
     Object.assign(link.style, ICON_ANCHOR_STYLE);
-    link.style.marginLeft = '6px';
+    link.style.marginLeft = "6px";
 
     if (isDirect) {
       /**
        * Briefly swap icon to a check mark on click, then restore.
        * @returns {void} Returns nothing.
        */
-      link.addEventListener('click', function handleDirectVideoClick() {
+      link.addEventListener("click", function handleDirectVideoClick() {
         while (link.firstChild) link.removeChild(link.firstChild);
-        link.appendChild(faIcon('circle-check'));
-        link.setAttribute('aria-label', `Download started: ${videoFilename}`);
+        link.appendChild(faIcon("circle-check"));
+        link.setAttribute("aria-label", `Download started: ${videoFilename}`);
 
         /**
          * Restore the file-video icon after confirmation feedback.
@@ -956,15 +1016,18 @@
          */
         function restoreVideoIcon() {
           while (link.firstChild) link.removeChild(link.firstChild);
-          link.appendChild(faIcon('file-video'));
-          link.setAttribute('aria-label', `Download recording: ${videoFilename}`);
+          link.appendChild(faIcon("file-video"));
+          link.setAttribute(
+            "aria-label",
+            `Download recording: ${videoFilename}`,
+          );
         }
 
         setTimeout(restoreVideoIcon, 2000);
       });
     }
 
-    adjacentAnchor.insertAdjacentElement('afterend', link);
+    adjacentAnchor.insertAdjacentElement("afterend", link);
   }
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -995,36 +1058,36 @@
     /** @type {number|null} */
     let resetTimer = null;
 
-    const btn = document.createElement('button');
+    const btn = document.createElement("button");
     btn.title = config.filename;
-    btn.setAttribute('aria-label', `Download ${config.filename}`);
+    btn.setAttribute("aria-label", `Download ${config.filename}`);
 
     const icon = faIcon(config.icon);
-    const labelEl = document.createElement('span');
+    const labelEl = document.createElement("span");
     labelEl.textContent = ` Download ${config.label}`;
-    labelEl.style.pointerEvents = 'none';
+    labelEl.style.pointerEvents = "none";
 
     btn.appendChild(icon);
     btn.appendChild(labelEl);
 
     Object.assign(btn.style, {
-      display: 'inline-flex',
-      alignItems: 'center',
+      display: "inline-flex",
+      alignItems: "center",
       background: BG_BASE,
-      color: '#ffffff',
-      border: 'none',
-      borderRadius: '8px',
-      padding: '9px 15px',
-      fontSize: '12px',
-      fontWeight: '700',
-      letterSpacing: '0.02em',
-      cursor: 'pointer',
-      boxShadow: '0 3px 12px rgba(0,0,0,0.45)',
-      whiteSpace: 'nowrap',
-      userSelect: 'none',
-      transition: 'background 0.12s ease',
-      lineHeight: '1.4',
-      gap: '6px',
+      color: "#ffffff",
+      border: "none",
+      borderRadius: "8px",
+      padding: "9px 15px",
+      fontSize: "12px",
+      fontWeight: "700",
+      letterSpacing: "0.02em",
+      cursor: "pointer",
+      boxShadow: "0 3px 12px rgba(0,0,0,0.45)",
+      whiteSpace: "nowrap",
+      userSelect: "none",
+      transition: "background 0.12s ease",
+      lineHeight: "1.4",
+      gap: "6px",
     });
 
     /**
@@ -1043,8 +1106,8 @@
       if (!btn.dataset.active) btn.style.background = BG_BASE;
     }
 
-    btn.addEventListener('mouseenter', handleMouseEnter);
-    btn.addEventListener('mouseleave', handleMouseLeave);
+    btn.addEventListener("mouseenter", handleMouseEnter);
+    btn.addEventListener("mouseleave", handleMouseLeave);
 
     /**
      * Initiate the download action and manage all button state transitions.
@@ -1052,10 +1115,10 @@
      */
     function handleButtonClick() {
       if (btn.dataset.active) return;
-      btn.dataset.active = '1';
-      btn.style.cursor = 'default';
-      labelEl.textContent = ' ⏳ Fetching…';
-      btn.setAttribute('aria-label', `Downloading ${config.label}…`);
+      btn.dataset.active = "1";
+      btn.style.cursor = "default";
+      labelEl.textContent = " ⏳ Fetching…";
+      btn.setAttribute("aria-label", `Downloading ${config.label}…`);
 
       /**
        * Update label with the current download progress.
@@ -1064,7 +1127,7 @@
        */
       function handleDownloadProgress(pct) {
         labelEl.textContent = ` ⏳ ${pct}%`;
-        btn.setAttribute('aria-label', `Downloading ${config.label}: ${pct}%`);
+        btn.setAttribute("aria-label", `Downloading ${config.label}: ${pct}%`);
       }
 
       /**
@@ -1072,10 +1135,10 @@
        * @returns {void} Returns nothing.
        */
       function handleDownloadSuccess() {
-        const successText = config.successLabel || 'Downloaded';
+        const successText = config.successLabel || "Downloaded";
         labelEl.textContent = ` ✓ ${successText}`;
         liveRegion.textContent = `${successText}: ${config.filename}`;
-        btn.setAttribute('aria-label', `${successText}: ${config.filename}`);
+        btn.setAttribute("aria-label", `${successText}: ${config.filename}`);
         btn.style.background = BG_SUCCESS;
 
         /**
@@ -1085,10 +1148,10 @@
         function resetAfterSuccess() {
           delete btn.dataset.active;
           labelEl.textContent = ` Download ${config.label}`;
-          liveRegion.textContent = '';
-          btn.setAttribute('aria-label', `Download ${config.filename}`);
+          liveRegion.textContent = "";
+          btn.setAttribute("aria-label", `Download ${config.filename}`);
           btn.style.background = BG_BASE;
-          btn.style.cursor = 'pointer';
+          btn.style.cursor = "pointer";
         }
 
         if (resetTimer !== null) clearTimeout(resetTimer);
@@ -1103,7 +1166,7 @@
       function handleDownloadFailure(msg) {
         labelEl.textContent = ` ❌ ${msg}`;
         liveRegion.textContent = `Download failed: ${msg}`;
-        btn.setAttribute('aria-label', `Download failed: ${msg}`);
+        btn.setAttribute("aria-label", `Download failed: ${msg}`);
         btn.style.background = BG_ERROR;
 
         /**
@@ -1113,10 +1176,10 @@
         function resetAfterFailure() {
           delete btn.dataset.active;
           labelEl.textContent = ` Download ${config.label}`;
-          liveRegion.textContent = '';
-          btn.setAttribute('aria-label', `Download ${config.filename}`);
+          liveRegion.textContent = "";
+          btn.setAttribute("aria-label", `Download ${config.filename}`);
           btn.style.background = BG_BASE;
-          btn.style.cursor = 'pointer';
+          btn.style.cursor = "pointer";
         }
 
         if (resetTimer !== null) clearTimeout(resetTimer);
@@ -1130,7 +1193,7 @@
       );
     }
 
-    btn.addEventListener('click', handleButtonClick);
+    btn.addEventListener("click", handleButtonClick);
 
     return btn;
   }
@@ -1150,45 +1213,52 @@
   function initScript() {
     // Guard: Verify Indico is available (critical for document-start timing)
     if (!isIndicoPage()) {
-      console.log('[indico-contrib] DEBUG: Indico not yet detectable, retrying...');
+      console.log(
+        "[indico-contrib] DEBUG: Indico not yet detectable, retrying...",
+      );
       return false;
     }
-    
+
     // Re-resolve mainEl — it may have been unavailable at an earlier retry cycle.
     mainEl =
-      document.querySelector('main, [id="content"], .event-page') || document.body;
+      document.querySelector('main, [id="content"], .event-page') ||
+      document.body;
 
     // Look for contribution title. Many Indico 3.x versions place title in h2 *after* the
     // event h1. Prioritize h2 within main, but skip nav/menu headings.
     let h1 = null;
-    
+
     // First, try to find an h2 within main (contribution titles are often h2),
     // but skip headings in navigation or with menu-like classes.
-    const h2Candidates = mainEl.querySelectorAll('h2:not(.event-menu-heading), h2:not([class*="menu"]):not([class*="nav"])');
+    const h2Candidates = mainEl.querySelectorAll(
+      'h2:not(.event-menu-heading), h2:not([class*="menu"]):not([class*="nav"])',
+    );
     if (h2Candidates.length > 0) {
       h1 = h2Candidates[0];
-    } else if (mainEl.querySelector('h2')) {
+    } else if (mainEl.querySelector("h2")) {
       // Fallback: use first h2 if no non-menu h2 found
-      h1 = mainEl.querySelector('h2');
+      h1 = mainEl.querySelector("h2");
     }
-    
+
     // If no h2, try h1 within main, then global search
     if (!h1) {
-      h1 = mainEl.querySelector('h1, .contribution-title, #contribution-title');
+      h1 = mainEl.querySelector("h1, .contribution-title, #contribution-title");
       if (!h1) {
         h1 = document.querySelector(
-          'h1, h2, .contribution-title, #contribution-title, .title-block h1',
+          "h1, h2, .contribution-title, #contribution-title, .title-block h1",
         );
       }
     }
     if (!h1) {
-      console.log('[indico-contrib] DEBUG: Title element (h1/h2) not found. DOM may not be ready.');
+      console.log(
+        "[indico-contrib] DEBUG: Title element (h1/h2) not found. DOM may not be ready.",
+      );
       return false;
     }
 
     const contribTitle = h1.textContent.trim();
     if (!contribTitle) {
-      console.log('[indico-contrib] DEBUG: Title text is empty');
+      console.log("[indico-contrib] DEBUG: Title text is empty");
       return false;
     }
 
@@ -1198,36 +1268,47 @@
     const videoLinks = findVideoLinks();
 
     if (attachmentAnchors.length === 0 && videoLinks.length === 0) {
-      console.log('[indico-contrib] DEBUG: No attachments or videos found. Attachments:', attachmentAnchors.length, 'Videos:', videoLinks.length);
+      console.log(
+        "[indico-contrib] DEBUG: No attachments or videos found. Attachments:",
+        attachmentAnchors.length,
+        "Videos:",
+        videoLinks.length,
+      );
       return false;
     }
 
-    console.log('[indico-contrib] DEBUG: Initialization successful! Title found, attachments:', attachmentAnchors.length, 'videos:', videoLinks.length);
-    const timeToken    = extractTimeToken();
-    const speakers     = extractSpeakers();
+    console.log(
+      "[indico-contrib] DEBUG: Initialization successful! Title found, attachments:",
+      attachmentAnchors.length,
+      "videos:",
+      videoLinks.length,
+    );
+    const timeToken = extractTimeToken();
+    const speakers = extractSpeakers();
 
-    let speakerToken     = '';
-    let affiliationToken = '';
+    let speakerToken = "";
+    let affiliationToken = "";
 
     if (speakers.length > 0) {
       speakerToken = sanitize(speakers[0].name);
-      if (speakers.length > 1) speakerToken += '_et_al';
-      if (speakers[0].affiliation) affiliationToken = sanitize(speakers[0].affiliation);
+      if (speakers.length > 1) speakerToken += "_et_al";
+      if (speakers[0].affiliation)
+        affiliationToken = sanitize(speakers[0].affiliation);
     }
 
     stem = capStemLength(
       [
-        eventName    ? sanitize(eventName)    : '',
-        sessionTrack ? sanitize(sessionTrack) : '',
-        dateToken    || '',
-        timeToken    || '',
+        eventName ? sanitize(eventName) : "",
+        sessionTrack ? sanitize(sessionTrack) : "",
+        dateToken || "",
+        timeToken || "",
         contribId,
         sanitize(contribTitle),
         speakerToken,
         affiliationToken,
       ]
         .filter(Boolean)
-        .join('_') || 'indico_contrib',
+        .join("_") || "indico_contrib",
     );
 
     // ── Enhance in-page attachment anchors ──────────────────────────────────
@@ -1250,186 +1331,203 @@
 
     // ── Build floating panel (idempotent) ───────────────────────────────────
     if (document.getElementById(PANEL_ID)) {
-      console.log('[indico-contrib] Panel already exists, skipping creation');
+      console.log("[indico-contrib] Panel already exists, skipping creation");
       return true;
     }
 
     try {
-      const panel = document.createElement('div');
+      const panel = document.createElement("div");
       panel.id = PANEL_ID;
-      panel.setAttribute('role', 'region');
-      panel.setAttribute('aria-label', 'Indico contribution file downloads');
+      panel.setAttribute("role", "region");
+      panel.setAttribute("aria-label", "Indico contribution file downloads");
       Object.assign(panel.style, {
-        position: 'fixed',
-        bottom: '24px',
-        right: '24px',
-        zIndex: '9999',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '8px',
-        fontFamily: '-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif',
+        position: "fixed",
+        bottom: "24px",
+        right: "24px",
+        zIndex: "9999",
+        display: "flex",
+        flexDirection: "column",
+        gap: "8px",
+        fontFamily:
+          '-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif',
       });
 
-    const liveRegion = document.createElement('span');
-    liveRegion.setAttribute('aria-live', 'polite');
-    liveRegion.setAttribute('aria-atomic', 'true');
-    Object.assign(liveRegion.style, {
-      position: 'absolute',
-      width: '1px',
-      height: '1px',
-      padding: '0',
-      margin: '-1px',
-      overflow: 'hidden',
-      clip: 'rect(0,0,0,0)',
-      whiteSpace: 'nowrap',
-      border: '0',
-    });
-    panel.appendChild(liveRegion);
-
-    /**
-     * Create the panel dismiss button.
-     * @returns {HTMLButtonElement} Returns a configured dismiss button.
-     */
-    function makeDismissButton() {
-      const btn = document.createElement('button');
-      btn.textContent = '×';
-      btn.setAttribute('aria-label', 'Dismiss Indico file download panel');
-      btn.title = 'Dismiss';
-      Object.assign(btn.style, {
-        alignSelf: 'flex-end',
-        background: 'transparent',
-        border: 'none',
-        color: 'rgba(255,255,255,0.6)',
-        cursor: 'pointer',
-        fontSize: '16px',
-        lineHeight: '1',
-        padding: '0 2px',
-        userSelect: 'none',
+      const liveRegion = document.createElement("span");
+      liveRegion.setAttribute("aria-live", "polite");
+      liveRegion.setAttribute("aria-atomic", "true");
+      Object.assign(liveRegion.style, {
+        position: "absolute",
+        width: "1px",
+        height: "1px",
+        padding: "0",
+        margin: "-1px",
+        overflow: "hidden",
+        clip: "rect(0,0,0,0)",
+        whiteSpace: "nowrap",
+        border: "0",
       });
+      panel.appendChild(liveRegion);
 
       /**
-       * Hide the panel when the dismiss button is clicked.
-       * @returns {void} Returns nothing.
+       * Create the panel dismiss button.
+       * @returns {HTMLButtonElement} Returns a configured dismiss button.
        */
-      function handleDismissClick() {
-        panel.style.display = 'none';
+      function makeDismissButton() {
+        const btn = document.createElement("button");
+        btn.textContent = "×";
+        btn.setAttribute("aria-label", "Dismiss Indico file download panel");
+        btn.title = "Dismiss";
+        Object.assign(btn.style, {
+          alignSelf: "flex-end",
+          background: "transparent",
+          border: "none",
+          color: "rgba(255,255,255,0.6)",
+          cursor: "pointer",
+          fontSize: "16px",
+          lineHeight: "1",
+          padding: "0 2px",
+          userSelect: "none",
+        });
+
+        /**
+         * Hide the panel when the dismiss button is clicked.
+         * @returns {void} Returns nothing.
+         */
+        function handleDismissClick() {
+          panel.style.display = "none";
+        }
+
+        btn.addEventListener("click", handleDismissClick);
+        return btn;
       }
 
-      btn.addEventListener('click', handleDismissClick);
-      return btn;
-    }
+      panel.appendChild(makeDismissButton());
 
-    panel.appendChild(makeDismissButton());
-
-    // ── Per-format slide download buttons ───────────────────────────────────
-    attachmentAnchors.forEach(
-      /**
-       * Create and append a panel download button for each attachment anchor.
-       * @param {HTMLAnchorElement} anchor - Specifies the enhanced attachment anchor.
-       * @returns {void} Returns nothing.
-       */
-      function addSlidesPanelButton(anchor) {
-        let ext;
-        try {
-          const m = new URL(anchor.href).pathname.match(/\.(\w+)$/);
-          if (!m) return;
-          ext = m[1].toLowerCase();
-        } catch {
-          return;
-        }
-
-        const format = SLIDES_FORMAT[ext] || {
-          icon: 'file',
-          mime: 'application/octet-stream',
-        };
-        const filename = `${stem}.${ext}`;
-        const buttonLabel = SLIDE_BUTTON_LABELS[ext] || ext.toUpperCase();
-
+      // ── Per-format slide download buttons ───────────────────────────────────
+      attachmentAnchors.forEach(
         /**
-         * Trigger a GM_xmlhttpRequest download for the attachment.
-         * @param {function(number): void} onProgress
-         * @param {function(): void} onSuccess
-         * @param {function(string): void} onFailure
+         * Create and append a panel download button for each attachment anchor.
+         * @param {HTMLAnchorElement} anchor - Specifies the enhanced attachment anchor.
          * @returns {void} Returns nothing.
          */
-        function triggerSlidesDownload(onProgress, onSuccess, onFailure) {
-          const trusted = getTrustedAttachmentUrl(anchor.href);
-          if (!trusted) { onFailure('Invalid URL'); return; }
-          downloadViaXhr(
-            trusted.href, filename, format, onProgress, onSuccess, onFailure,
-          );
-        }
-
-        panel.appendChild(
-          makeDownloadButton(
-            {
-              label: buttonLabel,
-              icon: format.icon,
-              filename,
-              triggerDownload: triggerSlidesDownload,
-            },
-            liveRegion,
-          ),
-        );
-      },
-    );
-
-    // ── Video buttons ────────────────────────────────────────────────────────
-    videoLinks.forEach(
-      /**
-       * Create and append a panel button for each detected video link.
-       * @param {VideoLink} vl - Specifies the video link.
-       * @returns {void} Returns nothing.
-       */
-      function addVideoPanelButton(vl) {
-        const isDirect   = vl.type === 'mp4';
-        const typeLabel  = { mp4: 'Video', youtube: 'YouTube', vimeo: 'Vimeo' }[vl.type] || 'Video';
-        const videoFilename = isDirect ? `${stem}.mp4` : typeLabel;
-        const icon          = isDirect ? 'file-video' : 'circle-play';
-        const successLabel  = isDirect ? 'Downloaded' : 'Opened';
-
-        /**
-         * Trigger a native download for MP4 or open an external URL in a new tab.
-         * @param {function(number): void} _onProgress - Unused for video actions.
-         * @param {function(): void} onSuccess
-         * @param {function(string): void} _onFailure - Unused for video actions.
-         * @returns {void} Returns nothing.
-         */
-        function triggerVideoAction(_onProgress, onSuccess, _onFailure) {
-          if (isDirect) {
-            const dl = document.createElement('a');
-            dl.href = vl.href;
-            dl.download = videoFilename;
-            dl.style.display = 'none';
-            document.body.appendChild(dl);
-            dl.click();
-            document.body.removeChild(dl);
-          } else {
-            window.open(vl.href, '_blank', 'noopener,noreferrer');
+        function addSlidesPanelButton(anchor) {
+          let ext;
+          try {
+            const m = new URL(anchor.href).pathname.match(/\.(\w+)$/);
+            if (!m) return;
+            ext = m[1].toLowerCase();
+          } catch {
+            return;
           }
-          onSuccess();
-        }
 
-        panel.appendChild(
-          makeDownloadButton(
-            {
-              label: typeLabel,
-              icon,
-              filename: videoFilename,
-              successLabel,
-              triggerDownload: triggerVideoAction,
-            },
-            liveRegion,
-          ),
-        );
-      },
-    );
+          const format = SLIDES_FORMAT[ext] || {
+            icon: "file",
+            mime: "application/octet-stream",
+          };
+          const filename = `${stem}.${ext}`;
+          const buttonLabel = SLIDE_BUTTON_LABELS[ext] || ext.toUpperCase();
 
-    document.body.appendChild(panel);
-    console.log('[indico-contrib] SUCCESS: Panel created and appended to DOM');
-    return true;
+          /**
+           * Trigger a GM_xmlhttpRequest download for the attachment.
+           * @param {function(number): void} onProgress
+           * @param {function(): void} onSuccess
+           * @param {function(string): void} onFailure
+           * @returns {void} Returns nothing.
+           */
+          function triggerSlidesDownload(onProgress, onSuccess, onFailure) {
+            const trusted = getTrustedAttachmentUrl(anchor.href);
+            if (!trusted) {
+              onFailure("Invalid URL");
+              return;
+            }
+            downloadViaXhr(
+              trusted.href,
+              filename,
+              format,
+              onProgress,
+              onSuccess,
+              onFailure,
+            );
+          }
+
+          panel.appendChild(
+            makeDownloadButton(
+              {
+                label: buttonLabel,
+                icon: format.icon,
+                filename,
+                triggerDownload: triggerSlidesDownload,
+              },
+              liveRegion,
+            ),
+          );
+        },
+      );
+
+      // ── Video buttons ────────────────────────────────────────────────────────
+      videoLinks.forEach(
+        /**
+         * Create and append a panel button for each detected video link.
+         * @param {VideoLink} vl - Specifies the video link.
+         * @returns {void} Returns nothing.
+         */
+        function addVideoPanelButton(vl) {
+          const isDirect = vl.type === "mp4";
+          const typeLabel =
+            { mp4: "Video", youtube: "YouTube", vimeo: "Vimeo" }[vl.type] ||
+            "Video";
+          const videoFilename = isDirect ? `${stem}.mp4` : typeLabel;
+          const icon = isDirect ? "file-video" : "circle-play";
+          const successLabel = isDirect ? "Downloaded" : "Opened";
+
+          /**
+           * Trigger a native download for MP4 or open an external URL in a new tab.
+           * @param {function(number): void} _onProgress - Unused for video actions.
+           * @param {function(): void} onSuccess
+           * @param {function(string): void} _onFailure - Unused for video actions.
+           * @returns {void} Returns nothing.
+           */
+          function triggerVideoAction(_onProgress, onSuccess, _onFailure) {
+            if (isDirect) {
+              const dl = document.createElement("a");
+              dl.href = vl.href;
+              dl.download = videoFilename;
+              dl.style.display = "none";
+              document.body.appendChild(dl);
+              dl.click();
+              document.body.removeChild(dl);
+            } else {
+              window.open(vl.href, "_blank", "noopener,noreferrer");
+            }
+            onSuccess();
+          }
+
+          panel.appendChild(
+            makeDownloadButton(
+              {
+                label: typeLabel,
+                icon,
+                filename: videoFilename,
+                successLabel,
+                triggerDownload: triggerVideoAction,
+              },
+              liveRegion,
+            ),
+          );
+        },
+      );
+
+      document.body.appendChild(panel);
+      console.log(
+        "[indico-contrib] SUCCESS: Panel created and appended to DOM",
+      );
+      return true;
     } catch (err) {
-      console.error('[indico-contrib] ERROR during panel creation:', err.message, err);
+      console.error(
+        "[indico-contrib] ERROR during panel creation:",
+        err.message,
+        err,
+      );
       return false;
     }
   }
@@ -1438,13 +1536,15 @@
   // BOOT
   // ──────────────────────────────────────────────────────────────────────────
 
-  console.log('[indico-contrib] ✓ Calling initScript() immediately...');
-  
+  console.log("[indico-contrib] ✓ Calling initScript() immediately...");
+
   if (initScript()) {
-    console.log('[indico-contrib] ✓ SUCCESS on first try!');
+    console.log("[indico-contrib] ✓ SUCCESS on first try!");
   } else {
-    console.log('[indico-contrib] ⏳ DOM not ready yet, initializing retry mechanisms...');
-    
+    console.log(
+      "[indico-contrib] ⏳ DOM not ready yet, initializing retry mechanisms...",
+    );
+
     // Mechanism 1: MutationObserver for any DOM changes
     const retryObserver = new MutationObserver(
       /**
@@ -1453,28 +1553,45 @@
        */
       function retryInitOnMutation() {
         initRetryCount += 1;
-        console.log('[indico-contrib] [MutationObserver] Retry attempt', initRetryCount);
-        
+        console.log(
+          "[indico-contrib] [MutationObserver] Retry attempt",
+          initRetryCount,
+        );
+
         if (initScript()) {
-          console.log('[indico-contrib] ✓ SUCCESS via MutationObserver at retry', initRetryCount);
+          console.log(
+            "[indico-contrib] ✓ SUCCESS via MutationObserver at retry",
+            initRetryCount,
+          );
           retryObserver.disconnect();
           return;
         }
-        
+
         if (initRetryCount >= MAX_INIT_RETRIES) {
-          console.log('[indico-contrib] ⚠️  Reached max MutationObserver retries:', MAX_INIT_RETRIES);
+          console.log(
+            "[indico-contrib] ⚠️  Reached max MutationObserver retries:",
+            MAX_INIT_RETRIES,
+          );
           retryObserver.disconnect();
         }
       },
     );
-    
-    console.log('[indico-contrib] Starting MutationObserver on document.documentElement...');
-    retryObserver.observe(document.documentElement, { childList: true, subtree: true, attributes: true });
-    
+
+    console.log(
+      "[indico-contrib] Starting MutationObserver on document.documentElement...",
+    );
+    retryObserver.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+    });
+
     // Mechanism 2: Timeout-based retry (more aggressive for document-start timing)
-    console.log('[indico-contrib] Starting timeout-based retry sequence...');
-    const timeoutRetries = [100, 200, 500, 750, 1000, 1500, 2000, 3000, 5000, 8000, 12000, 15000]; // ms
-    
+    console.log("[indico-contrib] Starting timeout-based retry sequence...");
+    const timeoutRetries = [
+      100, 200, 500, 750, 1000, 1500, 2000, 3000, 5000, 8000, 12000, 15000,
+    ]; // ms
+
     /**
      * Timeout-based retry handler.
      * @param {number} index - Current position in retry sequence.
@@ -1482,53 +1599,80 @@
      */
     function scheduleTimeoutRetry(index) {
       if (index >= timeoutRetries.length) {
-        console.log('[indico-contrib] ⚠️  Reached end of timeout retry sequence (15s)');
+        console.log(
+          "[indico-contrib] ⚠️  Reached end of timeout retry sequence (15s)",
+        );
         return;
       }
-      
+
       if (document.getElementById(PANEL_ID)) {
-        console.log('[indico-contrib] ✓ Panel already exists, skipping timeout retry');
+        console.log(
+          "[indico-contrib] ✓ Panel already exists, skipping timeout retry",
+        );
         return;
       }
-      
+
       const delay = timeoutRetries[index];
       setTimeout(() => {
         if (document.getElementById(PANEL_ID)) {
-          console.log('[indico-contrib] ✓ Panel already exists, stopping timeout retries');
+          console.log(
+            "[indico-contrib] ✓ Panel already exists, stopping timeout retries",
+          );
           return;
         }
-        
-        console.log('[indico-contrib] [Timeout] Retry attempt at', delay, 'ms (index', index, ')');
+
+        console.log(
+          "[indico-contrib] [Timeout] Retry attempt at",
+          delay,
+          "ms (index",
+          index,
+          ")",
+        );
         if (initScript()) {
-          console.log('[indico-contrib] ✓ SUCCESS via timeout retry at', delay + 'ms');
+          console.log(
+            "[indico-contrib] ✓ SUCCESS via timeout retry at",
+            delay + "ms",
+          );
           retryObserver.disconnect();
         } else {
           scheduleTimeoutRetry(index + 1);
         }
       }, delay);
     }
-    
+
     scheduleTimeoutRetry(0);
-    
+
     // Panic mode: If nothing has worked by 20 seconds, try one more time very aggressively
     setTimeout(() => {
       if (!document.getElementById(PANEL_ID)) {
-        console.log('[indico-contrib] [Panic Mode] Last-ditch attempt at 20s');
+        console.log("[indico-contrib] [Panic Mode] Last-ditch attempt at 20s");
         if (initScript()) {
-          console.log('[indico-contrib] ✓ SUCCESS via panic mode!');
+          console.log("[indico-contrib] ✓ SUCCESS via panic mode!");
         } else {
-          console.log('[indico-contrib] ⚠️  Panic mode also failed. Script could not initialize.');
+          console.log(
+            "[indico-contrib] ⚠️  Panic mode also failed. Script could not initialize.",
+          );
           // Final check: Is this even an Indico page?
           if (!isIndicoPage()) {
-            console.log('[indico-contrib] ERROR: Not actually an Indico page. Check console for details.');
-            console.log('[indico-contrib] Generator meta:', document.querySelector('meta[name="generator"]')?.content);
-            console.log('[indico-contrib] .indico class:', !!document.querySelector('.indico'));
-            console.log('[indico-contrib] Indico global:', typeof window.Indico);
+            console.log(
+              "[indico-contrib] ERROR: Not actually an Indico page. Check console for details.",
+            );
+            console.log(
+              "[indico-contrib] Generator meta:",
+              document.querySelector('meta[name="generator"]')?.content,
+            );
+            console.log(
+              "[indico-contrib] .indico class:",
+              !!document.querySelector(".indico"),
+            );
+            console.log(
+              "[indico-contrib] Indico global:",
+              typeof window.Indico,
+            );
           }
         }
         retryObserver.disconnect();
       }
     }, 20000);
   }
-
 })();
