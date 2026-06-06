@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Palo Alto Networks SaaS EDL Table Downloader
 // @namespace    https://github.com/netravnen/userscripts
-// @version      1.1.0
+// @version      1.2.0
 // @description  Floating panel with one-click JSON, CSV, and plain text URL download buttons for Palo Alto Networks SaaS EDL tables
 // @author       -
 // @icon         https://www.paloaltonetworks.com/favicon.ico
