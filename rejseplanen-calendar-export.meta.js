@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Rejseplanen - Quick Calendar Export
 // @namespace    https://github.com/netravnen/userscripts
-// @version      0.7.1
-// @description  Adds Outlook.com, Outlook M365 (cloud.microsoft), and Google Calendar quick-add buttons using Rejseplanen's own native "Detaljer"-style secondary button classes, alongside the native "Gem" (.ics) button, with condensed overlay copy to make room
+// @version      0.8.3
+// @description  Adds Outlook.com and Outlook M365 (cloud.microsoft) quick-add buttons to both the production (webapp) and beta (webapp-nextgen) Rejseplanen calendar export UI, plus Google Calendar on production; the beta rows are self-styled rather than cloned from Angular's own components
 // @author       -
 // @icon         https://www.rejseplanen.dk/favicon.ico
 // @license      MIT

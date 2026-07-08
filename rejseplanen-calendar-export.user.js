@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Rejseplanen - Quick Calendar Export
 // @namespace    https://github.com/netravnen/userscripts
-// @version      0.7.1
-// @description  Adds Outlook.com, Outlook M365 (cloud.microsoft), and Google Calendar quick-add buttons using Rejseplanen's own native "Detaljer"-style secondary button classes, alongside the native "Gem" (.ics) button, with condensed overlay copy to make room
+// @version      0.8.3
+// @description  Adds Outlook.com and Outlook M365 (cloud.microsoft) quick-add buttons to both the production (webapp) and beta (webapp-nextgen) Rejseplanen calendar export UI, plus Google Calendar on production; the beta rows are self-styled rather than cloned from Angular's own components
 // @author       -
 // @icon         https://www.rejseplanen.dk/favicon.ico
 // @license      MIT
@@ -19,16 +19,25 @@
 // ==/UserScript==
 
 /**
- * Inject Outlook.com, Outlook M365 (cloud.microsoft), and Google Calendar
- * quick-add buttons into Rejseplanen's "Gem" (.ics export) overlay.
+ * Inject Outlook.com and Outlook M365 (cloud.microsoft) quick-add buttons —
+ * plus Google Calendar on the production site — into Rejseplanen's calendar
+ * export UI, on both the production site (webapp, jQuery/Hafas-widget based)
+ * and the beta site (webapp-nextgen, Angular-based). The two variants have
+ * unrelated DOM structures and are handled by entirely separate code paths;
+ * see the "PRODUCTION SITE" and "BETA SITE" sections below.
  * @returns {void} Returns nothing.
  */
 (function () {
   "use strict";
 
+  const INJECTED_FLAG = "rpQuickAddInjected";
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // PRODUCTION SITE (webapp) — jQuery/Hafas-widget "Gem" overlay
+  // ─────────────────────────────────────────────────────────────────────────
+
   const ICS_ANCHOR_SELECTOR = "a.hfs_calendarExportFormat.ics";
   const OVERLAY_SELECTOR = ".hfs_calendarExportOverlay";
-  const INJECTED_FLAG = "rpQuickAddInjected";
 
   /**
    * Condensed replacement text for the overlay's "Sådan gør du" step list,
@@ -391,10 +400,314 @@
     existingRow.replaceWith(gridRow);
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // BETA SITE (webapp-nextgen) — Angular "Add to calendar" panel
+  //
+  // This UI has no onclick payload to parse (Angular wires clicks via JS, not
+  // inline attributes) and already offers a native "Google Calendar" share
+  // option, so this variant only adds Outlook.com / Outlook (M365). Trip
+  // timing/names are instead recovered from the client-routed connection
+  // details URL itself, e.g.:
+  //   .../tp/connection-details/<HAFAS ctx>?start=A=...@O=<name>@...&dest=...
+  // The <ctx> path segment repeats "$<dep 12-digit local stamp>$<arr 12-digit
+  // local stamp>$" once per leg; the very first and very last 12-digit run in
+  // the whole ctx are the trip's overall departure/arrival. Times carry no
+  // UTC offset (they're Europe/Copenhagen wall-clock), so they're converted
+  // using Intl's own DST-aware offset lookup rather than a fixed +1/+2.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const BETA_ICS_LABEL_RE = /\.ics\b/i;
+  const BETA_CONNECTION_DETAILS_RE = /\/tp\/connection-details\//;
+
+  /**
+   * Extract a stop's display name from a `start=`/`dest=` query parameter
+   * value (already URL-decoded by `URLSearchParams`), e.g.
+   * `A=2@O=Rugårdsvej 25, 5000 Odense C, Odense Kommune@H=25@...` → the `O=`
+   * field up to the next `@`.
+   * @param {string|null} paramValue - Specifies the decoded query param value.
+   * @returns {string|null} Returns the trimmed stop name, or null when absent.
+   */
+  function extractQueryStopName(paramValue) {
+    if (!paramValue) return null;
+    const m = paramValue.match(/@O=([^@]+)@/);
+    return m ? m[1].trim() : null;
+  }
+
+  /**
+   * Check whether a 12-digit string plausibly encodes a `YYYYMMDDHHmm` local
+   * timestamp, to filter out incidental 12-digit runs elsewhere in the ctx
+   * segment (e.g. inside its trailing base64 blob) before picking the
+   * first/last real departure/arrival stamp.
+   * @param {string} stamp - Specifies a candidate 12-digit substring.
+   * @returns {boolean} Returns true when the value parses as a plausible date/time.
+   */
+  function isPlausibleLocalStamp(stamp) {
+    const y = parseInt(stamp.slice(0, 4), 10);
+    const mo = parseInt(stamp.slice(4, 6), 10);
+    const d = parseInt(stamp.slice(6, 8), 10);
+    const h = parseInt(stamp.slice(8, 10), 10);
+    const mi = parseInt(stamp.slice(10, 12), 10);
+    const nowYear = new Date().getFullYear();
+    return (
+      y >= nowYear - 1 &&
+      y <= nowYear + 2 &&
+      mo >= 1 &&
+      mo <= 12 &&
+      d >= 1 &&
+      d <= 31 &&
+      h <= 23 &&
+      mi <= 59
+    );
+  }
+
+  /**
+   * Convert a `YYYYMMDDHHmm` Europe/Copenhagen local timestamp into a compact
+   * UTC iCalendar timestamp (`YYYYMMDDTHHMMSSZ`), the same shape
+   * `TripExportArgs.dateStart`/`dateEnd` use for the production site — so
+   * `buildOutlookDeepLink`/`buildGoogleCalendarUrl` work unchanged for both
+   * sites. Uses `Intl.DateTimeFormat` to look up Denmark's actual UTC offset
+   * for that instant (CET/+1 or CEST/+2) rather than assuming a fixed one.
+   * @param {string} stamp - Specifies a 12-digit `YYYYMMDDHHmm` local timestamp.
+   * @returns {string} Returns a compact UTC iCalendar timestamp.
+   */
+  function copenhagenLocalStampToIcsUtc(stamp) {
+    const y = parseInt(stamp.slice(0, 4), 10);
+    const mo = parseInt(stamp.slice(4, 6), 10);
+    const d = parseInt(stamp.slice(6, 8), 10);
+    const h = parseInt(stamp.slice(8, 10), 10);
+    const mi = parseInt(stamp.slice(10, 12), 10);
+
+    const guessUtcMs = Date.UTC(y, mo - 1, d, h, mi, 0);
+    const offsetParts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "Europe/Copenhagen",
+      timeZoneName: "shortOffset",
+    }).formatToParts(new Date(guessUtcMs));
+    const offsetPart = offsetParts.find((p) => p.type === "timeZoneName");
+    const offsetMatch = offsetPart && offsetPart.value.match(/GMT([+-]\d+)/);
+    const offsetHours = offsetMatch ? parseInt(offsetMatch[1], 10) : 1;
+
+    const utcDate = new Date(guessUtcMs - offsetHours * 60 * 60 * 1000);
+    return utcDate.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+  }
+
+  /**
+   * Parse trip export arguments (matching `TripExportArgs`) out of a beta
+   * site connection-details URL.
+   * @param {string} href - Specifies the current page URL.
+   * @returns {TripExportArgs|null} Returns parsed trip export arguments, or
+   *   null when the URL isn't a connection-details view or couldn't be parsed.
+   */
+  function parseBetaTripArgs(href) {
+    let url;
+    try {
+      url = new URL(href);
+    } catch {
+      return null;
+    }
+    if (!BETA_CONNECTION_DETAILS_RE.test(url.pathname)) return null;
+
+    const originName = extractQueryStopName(url.searchParams.get("start"));
+    const destName = extractQueryStopName(url.searchParams.get("dest"));
+    if (!originName || !destName) return null;
+
+    const ctxSegment = url.pathname.split("/tp/connection-details/")[1];
+    if (!ctxSegment) return null;
+
+    let ctx;
+    try {
+      ctx = decodeURIComponent(ctxSegment);
+    } catch {
+      return null;
+    }
+
+    const stamps = (ctx.match(/\d{12}/g) || []).filter(isPlausibleLocalStamp);
+    if (stamps.length < 2) return null;
+
+    return {
+      dateStart: copenhagenLocalStampToIcsUtc(stamps[0]),
+      dateEnd: copenhagenLocalStampToIcsUtc(stamps[stamps.length - 1]),
+      description: encodeURIComponent(`Fra ${originName} til ${destName}.`),
+      title: `${originName} → ${destName}`,
+      location: "",
+    };
+  }
+
+  /**
+   * Find the beta "Add to calendar" panel's native "Download (.ics)" list
+   * item within a subtree, matched by its visible label rather than any
+   * Angular-internal class/attribute (which are compiler-generated per build
+   * and not a stable target), so detection survives both app rebuilds and UI
+   * language changes (".ics" isn't typically localized).
+   * @param {Element} scope - Specifies the subtree to search (or match) within.
+   * @returns {Element|null} Returns the `<next-gen-list-item>` element, or null.
+   */
+  function findBetaIcsListItem(scope) {
+    const titles = scope.matches?.("next-gen-list-item-title")
+      ? [scope]
+      : Array.from(scope.querySelectorAll?.("next-gen-list-item-title") || []);
+
+    for (const title of titles) {
+      if (BETA_ICS_LABEL_RE.test((title.textContent || "").trim())) {
+        return title.closest("next-gen-list-item");
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Text/icon color for a beta quick-add row, matching the blue used by
+   * Rejseplanen's own native "Google Calendar" / "Download (.ics)" rows.
+   * @type {string}
+   */
+  const BETA_ROW_COLOR = "#1a73e8";
+  /**
+   * Trailing icon color for a beta quick-add row, matching the muted gray
+   * used by the native rows' trailing action icons.
+   * @type {string}
+   */
+  const BETA_ROW_SUFFIX_COLOR = "#5f6368";
+  /** @type {string} */
+  const BETA_ROW_HOVER_BG = "#f1f3f4";
+
+  /**
+   * Build a quick-add row from plain elements, visually approximating
+   * Rejseplanen's native "Add to calendar" list items (leading icon, title,
+   * trailing icon). Cloning the real native `<next-gen-list-item>` was tried
+   * first but rendered grayed-out and unclickable — these custom elements
+   * evidently carry their own Angular component/Custom-Element JS behavior
+   * that a static `cloneNode` copy can't reproduce (no matching component
+   * instance/DI context gets attached to a clone) — so this row is fully
+   * self-styled instead of borrowing native tags/classes.
+   * @param {string} label - Specifies the visible row label.
+   * @param {string} url - Specifies the target calendar quick-add URL.
+   * @returns {HTMLDivElement} Returns a configured, ready-to-insert row element.
+   */
+  function makeBetaQuickAddRow(label, url) {
+    const row = document.createElement("div");
+    row.setAttribute("role", "button");
+    row.setAttribute("tabindex", "0");
+    row.setAttribute("aria-label", label);
+    Object.assign(row.style, {
+      display: "flex",
+      alignItems: "center",
+      gap: "12px",
+      width: "100%",
+      boxSizing: "border-box",
+      // Horizontal padding matches the native "Google Calendar"/"Download
+      // (.ics)" rows' own left/right inset, so the leading icon/text and the
+      // trailing icon line up at the same x-position across all four rows.
+      padding: "10px 16px",
+      borderRadius: "8px",
+      cursor: "pointer",
+      color: BETA_ROW_COLOR,
+      fontWeight: "600",
+      fontSize: "15px",
+      userSelect: "none",
+    });
+
+    const icon = faIcon("brands", "microsoft");
+    icon.style.marginRight = "0";
+    icon.style.fontSize = "20px";
+    icon.style.flex = "0 0 auto";
+
+    const titleEl = document.createElement("span");
+    titleEl.textContent = label;
+
+    // margin-left: auto pushes the suffix icon to the row's far right edge
+    // (matching the native "Google Calendar"/"Download (.ics)" rows) — more
+    // robust than relying on the title's own flex-grow, which has no free
+    // space to expand into unless the row is explicitly full-width.
+    const suffixIcon = faIcon("regular", "share-from-square");
+    suffixIcon.style.marginRight = "0";
+    suffixIcon.style.marginLeft = "auto";
+    suffixIcon.style.fontSize = "16px";
+    suffixIcon.style.color = BETA_ROW_SUFFIX_COLOR;
+    suffixIcon.style.flex = "0 0 auto";
+
+    row.appendChild(icon);
+    row.appendChild(titleEl);
+    row.appendChild(suffixIcon);
+
+    row.addEventListener("mouseenter", () => {
+      row.style.background = BETA_ROW_HOVER_BG;
+    });
+    row.addEventListener("mouseleave", () => {
+      row.style.background = "";
+    });
+
+    /**
+     * Open the quick-add URL in a new tab.
+     * @returns {void} Returns nothing.
+     */
+    function openInNewTab() {
+      window.open(url, "_blank", "noopener,noreferrer");
+    }
+
+    row.addEventListener("click", openInNewTab);
+    row.addEventListener(
+      "keydown",
+      /**
+       * Activate the row on Enter/Space, matching native button semantics.
+       * @param {KeyboardEvent} e - Specifies the keydown event.
+       * @returns {void} Returns nothing.
+       */
+      function handleKeydown(e) {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          openInNewTab();
+        }
+      },
+    );
+
+    return row;
+  }
+
+  /**
+   * Parse trip export arguments from the current beta site URL and insert
+   * Outlook.com / Outlook (M365) quick-add rows directly after the native
+   * "Download (.ics)" row. A no-op when the URL can't be parsed as a
+   * connection-details view, or when rows have already been injected for
+   * this panel instance.
+   * @param {Element} icsListItem - Specifies the native `<next-gen-list-item>`
+   *   for "Download (.ics)".
+   * @returns {void} Returns nothing.
+   */
+  function injectBetaQuickAddButtons(icsListItem) {
+    const wrapper = icsListItem.parentElement;
+    if (!wrapper || wrapper.dataset[INJECTED_FLAG] === "1") return;
+
+    const args = parseBetaTripArgs(location.href);
+    if (!args) return;
+
+    wrapper.dataset[INJECTED_FLAG] = "1";
+
+    const outlookUrl = buildOutlookDeepLink("https://outlook.live.com", args);
+    const outlookM365Url = buildOutlookDeepLink(
+      "https://outlook.cloud.microsoft",
+      args,
+    );
+
+    let anchor = wrapper;
+    [
+      outlookUrl && { label: "Outlook.com", url: outlookUrl },
+      outlookM365Url && { label: "Outlook (M365)", url: outlookM365Url },
+    ]
+      .filter(Boolean)
+      .forEach(({ label, url }) => {
+        const row = makeBetaQuickAddRow(label, url);
+        anchor.insertAdjacentElement("afterend", row);
+        anchor = row;
+      });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // SHARED — mutation observer wiring for both site variants
+  // ─────────────────────────────────────────────────────────────────────────
+
   /**
    * Handle a single DOM node added anywhere in the page, checking whether it
-   * is (or contains) the "Gem" (.ics) export anchor and injecting quick-add
-   * buttons when found.
+   * is (or contains) either site variant's calendar-export entry point and
+   * injecting quick-add buttons when found.
    * @param {Node} node - Specifies an added DOM node from a MutationObserver record.
    * @returns {void} Returns nothing.
    */
@@ -404,7 +717,13 @@
     const icsAnchor = node.matches(ICS_ANCHOR_SELECTOR)
       ? node
       : node.querySelector(ICS_ANCHOR_SELECTOR);
-    if (icsAnchor) injectQuickAddButtons(icsAnchor);
+    if (icsAnchor) {
+      injectQuickAddButtons(icsAnchor);
+      return;
+    }
+
+    const betaIcsListItem = findBetaIcsListItem(node);
+    if (betaIcsListItem) injectBetaQuickAddButtons(betaIcsListItem);
   }
 
   const overlayObserver = new MutationObserver(
