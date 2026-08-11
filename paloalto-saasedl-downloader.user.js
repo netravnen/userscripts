@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         Palo Alto Networks SaaS EDL Table Downloader
-// @namespace    https://github.com/netravnen/userscripts
-// @version      1.2.0
+// @namespace    https://saasedl.paloaltonetworks.com/
+// @version      1.4.0
 // @description  Floating panel with one-click JSON, CSV, and plain text URL download buttons for Palo Alto Networks SaaS EDL tables
-// @author       -
+// @author       netravnen
 // @icon         https://www.paloaltonetworks.com/favicon.ico
 // @license      MIT
 // @match        https://docs.paloaltonetworks.com/*
@@ -11,9 +11,12 @@
 // @updateURL    https://github.com/netravnen/userscripts/raw/refs/heads/main/paloalto-saasedl-downloader.meta.js
 // @downloadURL  https://github.com/netravnen/userscripts/raw/refs/heads/main/paloalto-saasedl-downloader.user.js
 // @supportURL   https://github.com/netravnen/userscripts/issues
-// @require      https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/js/fontawesome.min.js
-// @require      https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/js/regular.min.js
-// @grant        none
+// @require      https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/js/fontawesome.min.js#sha256=6b2cf1db39dba731b99d0d1b0246dec83a1cf4807336e7517b83807af2dfd615
+// @require      https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/js/regular.min.js#sha256=520dfc4ea22493d021802e6291587dcdf3f79bdbf23d513240c3871eb0f74f38
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_registerMenuCommand
+// @grant        GM_unregisterMenuCommand
 // @run-at       document-idle
 // @noframes
 // ==/UserScript==
@@ -36,6 +39,23 @@
   const PANEL_ID       = "paloalto-edl-download-panel";
   const MAX_INIT_RETRIES = 10;
   const FEED_SELECTOR  = 'a[href^="https://saasedl.paloaltonetworks.com/feeds/"]';
+
+  const DEBUG_STORAGE_KEY = "debug_logging";
+  let DEBUG = GM_getValue(DEBUG_STORAGE_KEY, false);
+
+  /** @returns {void} Returns nothing. */
+  function dbg(...args) { if (DEBUG) console.debug("[paloalto-edl]", ...args); }
+  /** @returns {void} Returns nothing. */
+  function dbgInfo(...args) { if (DEBUG) console.info("[paloalto-edl]", ...args); }
+  /** @returns {void} Returns nothing. */
+  function dbgWarn(...args) { if (DEBUG) console.warn("[paloalto-edl]", ...args); }
+
+  let debugToggleId = GM_registerMenuCommand(`Debug logging: ${DEBUG ? "ON" : "OFF"}`, function toggleDebugLogging() {
+    DEBUG = !DEBUG;
+    GM_setValue(DEBUG_STORAGE_KEY, DEBUG);
+    if (typeof GM_unregisterMenuCommand === "function") GM_unregisterMenuCommand(debugToggleId);
+    debugToggleId = GM_registerMenuCommand(`Debug logging: ${DEBUG ? "ON" : "OFF"}`, toggleDebugLogging);
+  });
 
   /** @type {number} */
   let initRetryCount = 0;
@@ -155,6 +175,7 @@
       });
     });
 
+    dbg('extracted', results.length, 'feed row(s)');
     return results;
   }
 
@@ -287,11 +308,13 @@
         btn.style.background = BG_SUCCESS;
         btn.setAttribute("aria-label", "Download startet succesfuldt");
         config.liveRegion.textContent = `Filen ${config.filename()} er blevet gemt`;
+        dbgInfo('downloaded', config.filename());
       } catch (_err) {
         label.textContent = " ❌ Ingen data fundet";
         btn.style.background = BG_ERROR;
         btn.setAttribute("aria-label", "Download fejlede");
         config.liveRegion.textContent = "Download fejlede. Ingen tabelelementer tilgængelige.";
+        console.error('paloalto-edl: download failed for', config.filename(), _err);
       } finally {
         if (dlAnchor.parentNode) document.body.removeChild(dlAnchor);
         if (blobUrl)             URL.revokeObjectURL(blobUrl);
@@ -525,6 +548,7 @@
     const currentAnchors = document.querySelectorAll(FEED_SELECTOR);
     if (currentAnchors.length === 0) return false;
     buildPanel();
+    dbgInfo('panel built,', currentAnchors.length, 'feed(s) detected');
     return true;
   }
 
@@ -532,9 +556,23 @@
     const retryObserver = new MutationObserver(function retryOnMutation() {
       initRetryCount += 1;
       if (initScript() || initRetryCount >= MAX_INIT_RETRIES) {
+        if (initRetryCount >= MAX_INIT_RETRIES) dbgWarn('gave up after', MAX_INIT_RETRIES, 'retries');
         retryObserver.disconnect();
       }
     });
     retryObserver.observe(document.body, { childList: true, subtree: true });
+  }
+
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = {
+      isoStamp,
+      convertToCSV,
+      convertToURLList,
+      extractEDLTableData,
+      faIcon,
+      makeDownloadButton,
+      buildPanel,
+      initScript,
+    };
   }
 })();
