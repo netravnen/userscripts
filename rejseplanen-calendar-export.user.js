@@ -1,19 +1,22 @@
 // ==UserScript==
 // @name         Rejseplanen - Quick Calendar Export
-// @namespace    https://github.com/netravnen/userscripts
-// @version      0.8.3
+// @namespace    https://www.rejseplanen.dk/
+// @version      0.9.1
 // @description  Adds Outlook.com and Outlook M365 (cloud.microsoft) quick-add buttons to both the production (webapp) and beta (webapp-nextgen) Rejseplanen calendar export UI, plus Google Calendar on production; the beta rows are self-styled rather than cloned from Angular's own components
-// @author       -
+// @author       netravnen
 // @icon         https://www.rejseplanen.dk/favicon.ico
 // @license      MIT
 // @match        https://*.rejseplanen.dk/*
 // @updateURL    https://github.com/netravnen/userscripts/raw/refs/heads/main/rejseplanen-calendar-export.meta.js
 // @downloadURL  https://github.com/netravnen/userscripts/raw/refs/heads/main/rejseplanen-calendar-export.user.js
 // @supportURL   https://github.com/netravnen/userscripts/issues
-// @require      https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/js/fontawesome.min.js
-// @require      https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/js/brands.min.js
-// @require      https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/js/regular.min.js
-// @grant        none
+// @require      https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/js/fontawesome.min.js#sha256=6b2cf1db39dba731b99d0d1b0246dec83a1cf4807336e7517b83807af2dfd615
+// @require      https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/js/brands.min.js#sha256=58897dac1cfca59514ebd2992f09acc67251d80d15dd7cfa9fcc21c47d6d2980
+// @require      https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/js/regular.min.js#sha256=520dfc4ea22493d021802e6291587dcdf3f79bdbf23d513240c3871eb0f74f38
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_registerMenuCommand
+// @grant        GM_unregisterMenuCommand
 // @noframes
 // @run-at       document-idle
 // ==/UserScript==
@@ -31,6 +34,87 @@
   "use strict";
 
   const INJECTED_FLAG = "rpQuickAddInjected";
+
+  const MODULE_PREFIX = "rejseplanenQuickAdd";
+
+  const DEBUG_STORAGE_KEY = "debug_logging";
+  let DEBUG = GM_getValue(DEBUG_STORAGE_KEY, false);
+
+  /** @returns {void} Returns nothing. */
+  function dbg(...args) { if (DEBUG) console.debug("[rejseplanen-quick-add]", ...args); }
+  /** @returns {void} Returns nothing. */
+  function dbgWarn(...args) { if (DEBUG) console.warn("[rejseplanen-quick-add]", ...args); }
+
+  let debugToggleId = GM_registerMenuCommand(`Debug logging: ${DEBUG ? "ON" : "OFF"}`, function toggleDebugLogging() {
+    DEBUG = !DEBUG;
+    GM_setValue(DEBUG_STORAGE_KEY, DEBUG);
+    if (typeof GM_unregisterMenuCommand === "function") GM_unregisterMenuCommand(debugToggleId);
+    debugToggleId = GM_registerMenuCommand(`Debug logging: ${DEBUG ? "ON" : "OFF"}`, toggleDebugLogging);
+  });
+
+  /**
+   * Default per-module enablement. The production and beta site code paths
+   * are independent (unrelated DOM structures, no shared state), so either
+   * can be disabled without affecting the other.
+   */
+  const FEATURE_FLAGS = Object.freeze({ productionSite: true, betaSite: true });
+  const FEATURE_FLAGS_STORAGE_KEY = `${MODULE_PREFIX}.featureFlags`;
+
+  /**
+   * Read persisted feature-flag overrides.
+   * @returns {Object.<string, boolean>} Returns the stored override map, or an empty object.
+   */
+  function getFeatureFlagOverrides() {
+    return GM_getValue(FEATURE_FLAGS_STORAGE_KEY, {});
+  }
+
+  /**
+   * Determine whether a named feature is enabled, honoring any persisted
+   * override over its default in `FEATURE_FLAGS`.
+   * @param {string} flagName - Specifies the feature flag name.
+   * @returns {boolean} Returns true when the feature is enabled.
+   */
+  function isFeatureEnabled(flagName) {
+    const overrides = getFeatureFlagOverrides();
+    return flagName in overrides ? !!overrides[flagName] : !!FEATURE_FLAGS[flagName];
+  }
+
+  /**
+   * Persist an override for a named feature flag.
+   * @param {string} flagName - Specifies the feature flag name.
+   * @param {boolean} enabled - Specifies the new enabled state.
+   * @returns {void} Returns nothing.
+   */
+  function setFeatureFlagEnabled(flagName, enabled) {
+    const overrides = getFeatureFlagOverrides();
+    overrides[flagName] = enabled;
+    GM_setValue(FEATURE_FLAGS_STORAGE_KEY, overrides);
+  }
+
+  /**
+   * Register a re-registering `GM_registerMenuCommand` toggle for a single
+   * feature flag, mirroring the debug-logging toggle's ON/OFF re-register
+   * pattern so the menu label updates immediately when clicked.
+   * @param {string} flagName - Specifies the feature flag name.
+   * @param {string} label - Specifies the human-readable label for the menu command.
+   * @returns {void} Returns nothing.
+   */
+  function registerFeatureFlagToggle(flagName, label) {
+    let toggleId = GM_registerMenuCommand(
+      `${label}: ${isFeatureEnabled(flagName) ? "ON" : "OFF"}`,
+      function toggleFeatureFlag() {
+        setFeatureFlagEnabled(flagName, !isFeatureEnabled(flagName));
+        if (typeof GM_unregisterMenuCommand === "function") GM_unregisterMenuCommand(toggleId);
+        toggleId = GM_registerMenuCommand(
+          `${label}: ${isFeatureEnabled(flagName) ? "ON" : "OFF"}`,
+          toggleFeatureFlag,
+        );
+      },
+    );
+  }
+
+  registerFeatureFlagToggle("productionSite", "Production site quick-add");
+  registerFeatureFlagToggle("betaSite", "Beta site quick-add");
 
   // ─────────────────────────────────────────────────────────────────────────
   // PRODUCTION SITE (webapp) — jQuery/Hafas-widget "Gem" overlay
@@ -372,7 +456,10 @@
     if (!existingRow || existingRow.dataset[INJECTED_FLAG] === "1") return;
 
     const args = parseExportIcsArgs(icsAnchor.getAttribute("onclick") || "");
-    if (!args) return;
+    if (!args) {
+      dbgWarn("could not parse exportIcs() args from Gem anchor onclick");
+      return;
+    }
 
     const overlayScope = icsAnchor.closest(OVERLAY_SELECTOR);
     if (overlayScope) condenseOverlayText(overlayScope);
@@ -677,7 +764,10 @@
     if (!wrapper || wrapper.dataset[INJECTED_FLAG] === "1") return;
 
     const args = parseBetaTripArgs(location.href);
-    if (!args) return;
+    if (!args) {
+      dbgWarn("could not parse trip args from beta connection-details URL");
+      return;
+    }
 
     wrapper.dataset[INJECTED_FLAG] = "1";
 
@@ -714,16 +804,24 @@
   function handleAddedNode(node) {
     if (!(node instanceof HTMLElement)) return;
 
-    const icsAnchor = node.matches(ICS_ANCHOR_SELECTOR)
-      ? node
-      : node.querySelector(ICS_ANCHOR_SELECTOR);
-    if (icsAnchor) {
-      injectQuickAddButtons(icsAnchor);
-      return;
+    if (isFeatureEnabled("productionSite")) {
+      const icsAnchor = node.matches(ICS_ANCHOR_SELECTOR)
+        ? node
+        : node.querySelector(ICS_ANCHOR_SELECTOR);
+      if (icsAnchor) {
+        dbg("production site: Gem overlay detected");
+        injectQuickAddButtons(icsAnchor);
+        return;
+      }
     }
 
-    const betaIcsListItem = findBetaIcsListItem(node);
-    if (betaIcsListItem) injectBetaQuickAddButtons(betaIcsListItem);
+    if (isFeatureEnabled("betaSite")) {
+      const betaIcsListItem = findBetaIcsListItem(node);
+      if (betaIcsListItem) {
+        dbg("beta site: Download (.ics) row detected");
+        injectBetaQuickAddButtons(betaIcsListItem);
+      }
+    }
   }
 
   const overlayObserver = new MutationObserver(
@@ -741,4 +839,32 @@
   );
 
   overlayObserver.observe(document.body, { childList: true, subtree: true });
+
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = {
+      parseExportIcsArgs,
+      decodeDescription,
+      icsUtcToIso,
+      buildGoogleCalendarUrl,
+      buildOutlookDeepLink,
+      extractQueryStopName,
+      isPlausibleLocalStamp,
+      copenhagenLocalStampToIcsUtc,
+      parseBetaTripArgs,
+      isFeatureEnabled,
+      getFeatureFlagOverrides,
+      setFeatureFlagEnabled,
+      faIcon,
+      makeQuickAddButton,
+      styleGemForGrid,
+      makeQuickAddGrid,
+      wrapInExportRow,
+      condenseOverlayText,
+      injectQuickAddButtons,
+      findBetaIcsListItem,
+      makeBetaQuickAddRow,
+      injectBetaQuickAddButtons,
+      handleAddedNode,
+    };
+  }
 })();
