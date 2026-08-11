@@ -14,6 +14,13 @@ desktop.ini
 *.html
 *.htm
 
+# Raw HTTP response captures while reverse-engineering a target site's API
+# before scripting against it:
+*.headers
+*.gz
+*.txt
+*.xml
+
 # Env / secrets
 .env
 .env.*
