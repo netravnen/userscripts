@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LSB CSV statement exporter
 // @namespace    https://github.com/netravnen/userscripts
-// @version      1.3.1
+// @version      1.3.2
 // @description  Export LSB Loan Account statements for later manual import to spiir
 // @author       -
 // @match        https://www.lsb.dk/da/netbank/accounts/loan-account?accountId=*
@@ -26,6 +26,17 @@
  */
 (function () {
   "use strict";
+
+  // Captured immediately, before any other code in this script runs, and
+  // used exclusively from here on instead of the live `sha256` global.
+  // @grant none means the @require'd js-sha256 library attaches itself as
+  // `window.sha256` in shared page context rather than an isolated
+  // sandbox; reading that global fresh on every call would let another
+  // script sharing this page redefine it at any later point (e.g. right
+  // before the user clicks "Copy Data") and silently intercept every
+  // row's date/amount/currency/balance as it's hashed. Capturing it once,
+  // here, closes that window without requiring a live-tested @grant change.
+  const sha256Fn = typeof sha256 === 'function' ? sha256 : null;
 
   const SEPARATOR = ";";
   const NEWLINE = "\n";
@@ -73,7 +84,7 @@
    * @returns {string} Returns the CSV payload as a single newline-joined string.
    */
   function generateDataElement() {
-    if (typeof sha256 !== 'function') {
+    if (!sha256Fn) {
       throw new Error('lsb-exporter: sha256() is unavailable (the @require script failed to load or was blocked)');
     }
 
@@ -314,7 +325,7 @@
         categoryType = Number(amount) < 0 ? "Expense" : "Income";
 
         // Build a user-defined unique statement identifier based on the data we can extract
-        let statementId = sha256(
+        let statementId = sha256Fn(
           [
             date,
             amount,

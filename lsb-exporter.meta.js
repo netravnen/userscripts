@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LSB CSV statement exporter
 // @namespace    https://github.com/netravnen/userscripts
-// @version      1.3.1
+// @version      1.3.2
 // @description  Export LSB Loan Account statements for later manual import to spiir
 // @author       -
 // @match        https://www.lsb.dk/da/netbank/accounts/loan-account?accountId=*
