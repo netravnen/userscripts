@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         RIPE Meeting - Session File Downloader
-// @namespace    https://github.com/netravnen/userscripts
-// @version      0.3.0
+// @namespace    https://www.ripe.net/
+// @version      0.4.0
 // @description  Floating panel with per-format download buttons + renamed in-page download links (PDF/PPT/PPTX/KEY/MP4)
-// @author       -
+// @author       netravnen
 // @icon         https://www.ripe.net/favicon.ico
 // @license      MIT
 // @match        https://*.ripe.net/programme/meeting-plan/sessions/*/*
@@ -11,9 +11,13 @@
 // @updateURL    https://github.com/netravnen/userscripts/raw/refs/heads/main/ripe-meeting.meta.js
 // @downloadURL  https://github.com/netravnen/userscripts/raw/refs/heads/main/ripe-meeting.user.js
 // @supportURL   https://github.com/netravnen/userscripts/issues
-// @require      https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/js/fontawesome.min.js
-// @require      https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/js/regular.min.js
+// @require      https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/js/fontawesome.min.js#sha256=6b2cf1db39dba731b99d0d1b0246dec83a1cf4807336e7517b83807af2dfd615
+// @require      https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/js/regular.min.js#sha256=520dfc4ea22493d021802e6291587dcdf3f79bdbf23d513240c3871eb0f74f38
 // @grant        GM_xmlhttpRequest
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_registerMenuCommand
+// @grant        GM_unregisterMenuCommand
 // @connect      pretalx.ripe.net
 // @noframes
 // @run-at       document-idle
@@ -27,6 +31,27 @@
   "use strict";
 
   if (!/^ripe\d+\.ripe\.net$/i.test(location.hostname)) return;
+
+  const DEBUG_STORAGE_KEY = "debug_logging";
+  let DEBUG = GM_getValue(DEBUG_STORAGE_KEY, false);
+
+  /** @returns {void} Returns nothing. */
+  function dbg(...args) { if (DEBUG) console.debug("[ripe-meeting]", ...args); }
+  /** @returns {void} Returns nothing. */
+  function dbgWarn(...args) { if (DEBUG) console.warn("[ripe-meeting]", ...args); }
+
+  /**
+   * Unregister and re-register the debug-logging menu command so its
+   * ON/OFF label reflects the current state immediately, rather than
+   * staying stale until the page reloads.
+   * @returns {void} Returns nothing.
+   */
+  let debugToggleId = GM_registerMenuCommand(`Debug logging: ${DEBUG ? "ON" : "OFF"}`, function toggleDebugLogging() {
+    DEBUG = !DEBUG;
+    GM_setValue(DEBUG_STORAGE_KEY, DEBUG);
+    if (typeof GM_unregisterMenuCommand === "function") GM_unregisterMenuCommand(debugToggleId);
+    debugToggleId = GM_registerMenuCommand(`Debug logging: ${DEBUG ? "ON" : "OFF"}`, toggleDebugLogging);
+  });
 
   /**
    * Map from RIPE meeting number to the calendar year it took place.
@@ -565,6 +590,7 @@
         }
 
         setTimeout(revokeBlobUrl, 10_000);
+        dbg("downloaded", filename);
         onSuccess();
       },
 
@@ -573,6 +599,7 @@
        * @returns {void} Returns nothing.
        */
       onerror() {
+        dbgWarn("network error fetching", href);
         onFailure("Network error");
       },
 
@@ -581,6 +608,7 @@
        * @returns {void} Returns nothing.
        */
       ontimeout() {
+        dbgWarn("timed out fetching", href);
         onFailure("Timed out");
       },
     });
@@ -1241,6 +1269,7 @@
       document.body.appendChild(panel);
     }
 
+    dbg("initialized for", stem);
     return true;
   }
 
@@ -1253,10 +1282,36 @@
       function retryInitOnMutation() {
         initRetryCount += 1;
         if (initScript() || initRetryCount >= MAX_INIT_RETRIES) {
+          if (initRetryCount >= MAX_INIT_RETRIES) dbgWarn("gave up after", MAX_INIT_RETRIES, "retries");
           retryObserver.disconnect();
         }
       },
     );
     retryObserver.observe(document.body, { childList: true, subtree: true });
+  }
+
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = {
+      sanitize,
+      capStemLength,
+      buildDateToken,
+      formatTimeToken,
+      getTrustedSlidesUrl,
+      isSamePageHashLink,
+      faIcon,
+      isTrackAnchor,
+      extractDateToken,
+      extractTimeToken,
+      findSpeakerContainer,
+      parseSpeakers,
+      findAllSlidesAnchors,
+      downloadViaXhr,
+      applyRenamedDownload,
+      findRecordingSection,
+      findMp4Href,
+      injectMp4Link,
+      makeDownloadButton,
+      initScript,
+    };
   }
 })();
