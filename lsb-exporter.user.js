@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LSB CSV statement exporter
 // @namespace    https://github.com/netravnen/userscripts
-// @version      1.3.0
+// @version      1.3.1
 // @description  Export LSB Loan Account statements for later manual import to spiir
 // @author       -
 // @match        https://www.lsb.dk/da/netbank/accounts/loan-account?accountId=*
@@ -12,7 +12,7 @@
 // @downloadURL  https://github.com/netravnen/userscripts/raw/refs/heads/main/lsb-exporter.user.js
 // @supportURL   https://github.com/netravnen/userscripts/issues
 // @grant        none
-// @require      https://cdnjs.cloudflare.com/ajax/libs/js-sha256/0.11.0/sha256.min.js
+// @require      https://cdnjs.cloudflare.com/ajax/libs/js-sha256/0.11.0/sha256.min.js#sha256=5e623445991d81ba5fb0abf201d7a6d45c9010c1f2e11377fefa8e8054572953
 // @run-at       document-idle
 // @noframes
 // ==/UserScript==
@@ -73,8 +73,15 @@
    * @returns {string} Returns the CSV payload as a single newline-joined string.
    */
   function generateDataElement() {
+    if (typeof sha256 !== 'function') {
+      throw new Error('lsb-exporter: sha256() is unavailable (the @require script failed to load or was blocked)');
+    }
+
     let rows = [];
     let table = document.querySelector('.transaction-list-inner');
+    if (!table) {
+      throw new Error('lsb-exporter: transaction list not found on the page');
+    }
     let data = table.querySelectorAll('.transaction-list-inner > div[tabindex="0"]');
 
     let headers = [
@@ -215,137 +222,150 @@
     // Reset the array. Set it to the headers construct
     rows = [headers.join(SEPARATOR)];
 
-    // Loop over the table rows
+    let skippedRows = 0;
+
+    // Loop over the table rows. Each row is handled independently so one
+    // malformed/unexpected row (missing field, unrecognized balance suffix,
+    // etc.) doesn't abort the entire export.
     data.forEach((item, index) => {
+      try {
 
-      // Immutable
-      let row = [],
-          today = new Date();
+        // Immutable
+        let row = [],
+            today = new Date();
 
-      // Mutable
-      let id;
-      let accountId;
-      let accountName = "BOLIGPRIORITETSKONTO";
-      let accountType;
-      let date;
-      let description;
-      let originalDescription;
-      let mainCategoryId = 14;
-      let mainCategoryName = "Bolig";
-      let categoryId = 114;
-      let categoryName = "Boliglån/husleje";
-      let categoryType;
-      let expenseType = "Variable"; // Fixed, Variable
-      let amount;
-      let balance;
-      let counterEntryId;
-      let comment;
-      let tags;
-      let extraordinary = "No"; // Yes, No
-      let splitGroupId;
-      let customDate;
-      let currency;
-      let originalAmount;
-      let originalCurrency;
+        // Mutable
+        let id;
+        let accountId;
+        let accountName = "BOLIGPRIORITETSKONTO";
+        let accountType;
+        let date;
+        let description;
+        let originalDescription;
+        let mainCategoryId = 14;
+        let mainCategoryName = "Bolig";
+        let categoryId = 114;
+        let categoryName = "Boliglån/husleje";
+        let categoryType;
+        let expenseType = "Variable"; // Fixed, Variable
+        let amount;
+        let balance;
+        let counterEntryId;
+        let comment;
+        let tags;
+        let extraordinary = "No"; // Yes, No
+        let splitGroupId;
+        let customDate;
+        let currency;
+        let originalAmount;
+        let originalCurrency;
 
-      // Extract the data we want
-      date        = item.querySelector('div.transaction-field.transaction-field--date');
-      description = item.querySelector('div.transaction-field.transaction-field--statementText');
-      amount      = item.querySelector('div.transaction-field.transaction-field--amount');
-      balance     = item.querySelector('div.transaction-field.transaction-field--balance');
+        // Extract the data we want
+        date        = item.querySelector('div.transaction-field.transaction-field--date');
+        description = item.querySelector('div.transaction-field.transaction-field--statementText');
+        amount      = item.querySelector('div.transaction-field.transaction-field--amount');
+        balance     = item.querySelector('div.transaction-field.transaction-field--balance');
 
-      // We only want the innertext from the four columns of each row extracted
-      date        = date.innerText;
-      description = description.innerText;
-      amount      = amount.innerText;
-      balance     = balance.innerText;
+        // We only want the innertext from the four columns of each row extracted
+        date        = date.innerText;
+        description = description.innerText;
+        amount      = amount.innerText;
+        balance     = balance.innerText;
 
-      /* Begin date parsing */
+        /* Begin date parsing */
 
-      // Native date parsing only supports english
-      date = date
-        .replace('okt', 'oct')
-        .replace('sept', 'sep')
-        .replace('juli', 'jul')
-        .replace('juni', 'jun')
-        .replace('maj', 'may');
+        // Native date parsing only supports english
+        date = date
+          .replace('okt', 'oct')
+          .replace('sept', 'sep')
+          .replace('juli', 'jul')
+          .replace('juni', 'jun')
+          .replace('maj', 'may');
 
-      // Not a date. Convert to parseable date
-      if (date == "I dag") {
-        date = today;
-      } else if (date == "I går") {
-        date = today.setDate(today.getDate() - 1);
+        // Not a date. Convert to parseable date
+        if (date == "I dag") {
+          date = today;
+        } else if (date == "I går") {
+          date = today.setDate(today.getDate() - 1);
+        }
+
+        // Parse date, Convert to ISO format, Extract YYYY-MM-DD
+        date = new Date(date)
+          .toISOString()
+          .split('T')[0];
+
+        /* End date parsing */
+
+        amount = amount.replace('.', '');
+
+        // Extract currency code
+        originalCurrency = balance
+          .match(/[a-zA-Z]+$/)[0]
+          .toUpperCase();
+
+        balance = balance
+          .replace('.', '')
+          .replace(/dkk$/i, '');
+
+        // Mirror the extracted currency; this script has no conversion logic
+        currency = originalCurrency;
+
+        // Derive income vs. expense from the amount's sign
+        categoryType = Number(amount) < 0 ? "Expense" : "Income";
+
+        // Build a user-defined unique statement identifier based on the data we can extract
+        let statementId = sha256(
+          [
+            date,
+            amount,
+            currency,
+            balance
+          ].join('_')
+        );
+
+        /* Begin output constructer */
+
+        // Construct the row we want to push as output
+        row[0]  = statementId;
+        row[1]  = accountId;
+        row[2]  = accountName;
+        row[3]  = accountType;
+        row[4]  = date;
+        row[5]  = description;
+        row[6]  = originalDescription;
+        row[7]  = mainCategoryId;
+        row[8]  = mainCategoryName;
+        row[9]  = categoryId;
+        row[10] = categoryName;
+        row[11] = categoryType;
+        row[12] = expenseType;
+        row[13] = amount;
+        row[14] = balance;
+        row[15] = counterEntryId;
+        row[16] = comment;
+        row[17] = tags;
+        row[18] = extraordinary;
+        row[19] = splitGroupId;
+        row[20] = customDate;
+        row[21] = currency;
+        row[22] = originalAmount;
+        row[23] = originalCurrency;
+
+
+        // Push data to the results array
+        rows.push(row.join(SEPARATOR));
+
+        /* End output constructer */
+
+      } catch (err) {
+        skippedRows += 1;
+        console.error('lsb-exporter: skipping row ' + index + ' (unexpected format)', err);
       }
-
-      // Parse date, Convert to ISO format, Extract YYYY-MM-DD
-      date = new Date(date)
-        .toISOString()
-        .split('T')[0];
-
-      /* End date parsing */
-
-      amount = amount.replace('.', '');
-
-      // Extract currency code
-      originalCurrency = balance
-        .match(/[a-zA-Z]+$/)[0]
-        .toUpperCase();
-
-      balance = balance
-        .replace('.', '')
-        .replace(/dkk$/i, '');
-
-      // Mirror the extracted currency; this script has no conversion logic
-      currency = originalCurrency;
-
-      // Derive income vs. expense from the amount's sign
-      categoryType = Number(amount) < 0 ? "Expense" : "Income";
-
-      // Build a user-defined unique statement identifier based on the data we can extract
-      let statementId = sha256(
-        [
-          date,
-          amount,
-          currency,
-          balance
-        ].join('_')
-      );
-
-      /* Begin output constructer */
-
-      // Construct the row we want to push as output
-      row[0]  = statementId;
-      row[1]  = accountId;
-      row[2]  = accountName;
-      row[3]  = accountType;
-      row[4]  = date;
-      row[5]  = description;
-      row[6]  = originalDescription;
-      row[7]  = mainCategoryId;
-      row[8]  = mainCategoryName;
-      row[9]  = categoryId;
-      row[10] = categoryName;
-      row[11] = categoryType;
-      row[12] = expenseType;
-      row[13] = amount;
-      row[14] = balance;
-      row[15] = counterEntryId;
-      row[16] = comment;
-      row[17] = tags;
-      row[18] = extraordinary;
-      row[19] = splitGroupId;
-      row[20] = customDate;
-      row[21] = currency;
-      row[22] = originalAmount;
-      row[23] = originalCurrency;
-
-
-      // Push data to the results array
-      rows.push(row.join(SEPARATOR));
-
-      /* End output constructer */
-
     });
+
+    if (skippedRows > 0) {
+      console.warn('lsb-exporter: ' + skippedRows + ' row(s) skipped due to unexpected format; the CSV is incomplete');
+    }
 
     return rows.join(NEWLINE);
   }
@@ -421,9 +441,11 @@
     copyTableRowsBtn.appendChild(copyTableRowsBtnInner);
 
     copyTableRowsBtn.addEventListener('click', function() {
-      copyTextToClipboard(
-        generateDataElement()
-      );
+      try {
+        copyTextToClipboard(generateDataElement());
+      } catch (err) {
+        console.error('lsb-exporter: export failed', err);
+      }
     });
   }
 
