@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         LSB CSV statement exporter
-// @namespace    https://github.com/netravnen/userscripts
-// @version      1.3.2
+// @namespace    https://www.lsb.dk/
+// @version      1.5.0
 // @description  Export LSB Loan Account statements for later manual import to spiir
-// @author       -
+// @author       netravnen
 // @match        https://www.lsb.dk/da/netbank/accounts/loan-account?accountId=*
 // @match        https://www.lsb.dk/netbank/accounts/loan-account?accountId=*
 // @icon         https://icons.duckduckgo.com/ip2/www.lsb.dk.ico
@@ -11,8 +11,11 @@
 // @updateURL    https://github.com/netravnen/userscripts/raw/refs/heads/main/lsb-exporter.meta.js
 // @downloadURL  https://github.com/netravnen/userscripts/raw/refs/heads/main/lsb-exporter.user.js
 // @supportURL   https://github.com/netravnen/userscripts/issues
-// @grant        none
 // @require      https://cdnjs.cloudflare.com/ajax/libs/js-sha256/0.11.0/sha256.min.js#sha256=5e623445991d81ba5fb0abf201d7a6d45c9010c1f2e11377fefa8e8054572953
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_registerMenuCommand
+// @grant        GM_unregisterMenuCommand
 // @run-at       document-idle
 // @noframes
 // ==/UserScript==
@@ -29,13 +32,10 @@
 
   // Captured immediately, before any other code in this script runs, and
   // used exclusively from here on instead of the live `sha256` global.
-  // @grant none means the @require'd js-sha256 library attaches itself as
-  // `window.sha256` in shared page context rather than an isolated
-  // sandbox; reading that global fresh on every call would let another
-  // script sharing this page redefine it at any later point (e.g. right
-  // before the user clicks "Copy Data") and silently intercept every
-  // row's date/amount/currency/balance as it's hashed. Capturing it once,
-  // here, closes that window without requiring a live-tested @grant change.
+  // The @require'd js-sha256 library attaches itself as `window.sha256`;
+  // capturing it once here (rather than reading the global fresh on every
+  // call) means a later redefinition of that global can't silently
+  // intercept a row's date/amount/currency/balance as it's hashed.
   const sha256Fn = typeof sha256 === 'function' ? sha256 : null;
 
   const SEPARATOR = ";";
@@ -45,6 +45,29 @@
   const PDF_BUTTON_SELECTOR = ".export-as-pdf-button";
   const COPY_BUTTON_SELECTOR = ".account-header-actions__export-button";
   const MAX_INIT_RETRIES = 10;
+
+  const DEBUG_STORAGE_KEY = "debug_logging";
+  let DEBUG = GM_getValue(DEBUG_STORAGE_KEY, false);
+
+  /** @returns {void} Returns nothing. */
+  function dbg(...args) { if (DEBUG) console.debug("[lsb-exporter]", ...args); }
+  /** @returns {void} Returns nothing. */
+  function dbgInfo(...args) { if (DEBUG) console.info("[lsb-exporter]", ...args); }
+  /** @returns {void} Returns nothing. */
+  function dbgWarn(...args) { if (DEBUG) console.warn("[lsb-exporter]", ...args); }
+
+  /**
+   * Unregister and re-register the debug-logging menu command so its
+   * ON/OFF label reflects the current state immediately, rather than
+   * staying stale until the page reloads.
+   * @returns {void} Returns nothing.
+   */
+  let debugToggleId = GM_registerMenuCommand(`Debug logging: ${DEBUG ? "ON" : "OFF"}`, function toggleDebugLogging() {
+    DEBUG = !DEBUG;
+    GM_setValue(DEBUG_STORAGE_KEY, DEBUG);
+    if (typeof GM_unregisterMenuCommand === "function") GM_unregisterMenuCommand(debugToggleId);
+    debugToggleId = GM_registerMenuCommand(`Debug logging: ${DEBUG ? "ON" : "OFF"}`, toggleDebugLogging);
+  });
 
   /** @type {number} */
   let initRetryCount = 0;
@@ -378,6 +401,7 @@
       console.warn('lsb-exporter: ' + skippedRows + ' row(s) skipped due to unexpected format; the CSV is incomplete');
     }
 
+    dbgInfo('generated CSV with', rows.length - 1, 'row(s),', skippedRows, 'skipped');
     return rows.join(NEWLINE);
   }
 
@@ -404,7 +428,7 @@
     try {
       const successful = document.execCommand('copy');
       const msg = successful ? 'successful' : 'unsuccessful';
-      console.log('Fallback: Copying text command was ' + msg);
+      dbg('Fallback: Copying text command was ' + msg);
     } catch (err) {
       console.error('Fallback: Oops, unable to copy', err);
     }
@@ -424,7 +448,7 @@
       return;
     }
     navigator.clipboard.writeText(text).then(function() {
-      console.log('Async: Copying to clipboard was successful!');
+      dbg('Async: Copying to clipboard was successful!');
     }, function(err) {
       console.error('Async: Could not copy text: ', err);
     });
@@ -473,6 +497,7 @@
     if (parentElement.querySelector(COPY_BUTTON_SELECTOR)) return true;
 
     injectCopyButton(parentElement);
+    dbgInfo('Copy Data button injected');
     return true;
   }
 
@@ -480,9 +505,20 @@
     const retryObserver = new MutationObserver(function retryOnMutation() {
       initRetryCount += 1;
       if (initScript() || initRetryCount >= MAX_INIT_RETRIES) {
+        if (initRetryCount >= MAX_INIT_RETRIES) dbgWarn('gave up after', MAX_INIT_RETRIES, 'retries');
         retryObserver.disconnect();
       }
     });
     retryObserver.observe(document.body, { childList: true, subtree: true });
+  }
+
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = {
+      generateDataElement,
+      copyTextToClipboard,
+      fallbackCopyTextToClipboard,
+      injectCopyButton,
+      initScript,
+    };
   }
 })();
