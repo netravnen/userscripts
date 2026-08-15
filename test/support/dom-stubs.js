@@ -165,6 +165,7 @@ function createElementStub(tagName) {
     innerText: "",
     value: "",
     id: "",
+    offsetWidth: 0,
     children,
     childNodes: children,
     setAttribute(name, value) {
@@ -172,6 +173,12 @@ function createElementStub(tagName) {
     },
     getAttribute(name) {
       return Object.prototype.hasOwnProperty.call(attributes, name) ? attributes[name] : null;
+    },
+    removeAttribute(name) {
+      delete attributes[name];
+    },
+    hasAttribute(name) {
+      return Object.prototype.hasOwnProperty.call(attributes, name);
     },
     appendChild(child) {
       detachFromCurrentParent(child);
